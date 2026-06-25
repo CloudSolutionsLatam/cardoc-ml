@@ -257,12 +257,14 @@ cardoc-ml/
 
 ## Dónde vive el runtime
 
-- **Local (sin Catalyst):** por defecto `CARDOC_PERSISTENCE=memory` + `CARDOC_CRM_MODE=mock`
-  + `CARDOC_REPORTS_MODE=mock`. Token de dev sembrado: `Bearer test-token` (todos los
-  scopes, Cuenta `acc_dev`). En `datastore` mode **no** se siembra ningún token: sin
-  sembrar uno, todo responde `401`.
+- **Local (sin Catalyst):** `pnpm dev` (compila + `scripts/dev-server.mjs`) levanta el
+  mismo `app` Express standalone en `:3030` (`PORT=` para cambiarlo; 3000 lo suele tener
+  el ERP/NestJS). Por defecto `CARDOC_PERSISTENCE=memory` + `*_MODE=mock`; token de dev
+  `Bearer test-token` (todos los scopes, Cuenta `acc_dev`). En `datastore` mode **no** se
+  siembra ningún token: sin sembrar uno, todo responde `401`.
 - **Smoke:** levantar el app Express compilado (`require` de `apps/catalyst/functions/api/dist/index.js`)
-  y `fetch` a los endpoints. El `index.js` es CommonJS (`export = app`).
+  y `fetch` a los endpoints. El `index.js` es CommonJS (`export = app`); por eso el mismo
+  app corre en Catalyst y standalone (`dev-server.mjs` solo le agrega `.listen`).
 - **Build/deploy:** `pnpm --filter @cardoc/fn-api run build` (tsc -b + esbuild) → `catalyst deploy`.
 - **Install en red corporativa:** `NODE_OPTIONS=--use-system-ca pnpm install` (CA propia / TLS interceptado).
 - Toolchain confirmado: node 24.13, pnpm 10.29.2.
