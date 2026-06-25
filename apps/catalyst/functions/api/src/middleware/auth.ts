@@ -52,11 +52,13 @@ export async function authMiddleware(
   _res: Response,
   next: NextFunction,
 ): Promise<void> {
-  const header = req.header("authorization") ?? "";
-  const token = header.startsWith("Bearer ") ? header.slice("Bearer ".length).trim() : "";
+  // Header PROPIO `X-Api-Key`, NO `Authorization`: Catalyst reserva `Authorization` y lo
+  // valida como token OAuth de Zoho (rechaza cualquier otro con INVALID_TOKEN antes de
+  // llegar a esta función). El token del consumidor viaja en X-Api-Key.
+  const token = (req.header("x-api-key") ?? "").trim();
 
   if (token.length === 0) {
-    next(new ApiError(401, "UNAUTHENTICATED", "falta el Bearer token"));
+    next(new ApiError(401, "UNAUTHENTICATED", "falta el header X-Api-Key"));
     return;
   }
   if (!req.container) {

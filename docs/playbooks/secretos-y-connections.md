@@ -173,7 +173,7 @@ El switch de modo lo da `CARDOC_CRM_MODE`: `zoho` → `ZohoCrmClient` (HTTP real
 
 ## 4. Rotación de tokens de API de consumidores
 
-Los consumidores (automotoras) se autentican contra cardoc con un **Bearer token** propio. Estos tokens son responsabilidad de cardoc, no de Zoho.
+Los consumidores (automotoras) se autentican contra cardoc con un **X-Api-Key token** propio. Estos tokens son responsabilidad de cardoc, no de Zoho.
 
 ### 4.1 Solo se guarda el hash
 
@@ -211,7 +211,7 @@ Notas:
 
 ### 4.3 Qué pasa en el pipeline
 
-`authMiddleware` resuelve el Bearer del header `Authorization` hasheándolo (`hashToken`) y buscando la fila en `api_tokens`. Un token revocado (`revoked_at` no nulo) o expirado (`expires_at` pasado) → `UNAUTHENTICATED 401`, con el sobre de error único `{ error: { code, message, correlationId, details? } }`. El detalle del pipeline (orden de middlewares, scopes, caps) está en [ARQUITECTURA](../../ARQUITECTURA.md) y [CONTRATOS](../../CONTRATOS.md).
+`authMiddleware` resuelve el X-Api-Key del header `X-Api-Key` hasheándolo (`hashToken`) y buscando la fila en `api_tokens`. Un token revocado (`revoked_at` no nulo) o expirado (`expires_at` pasado) → `UNAUTHENTICATED 401`, con el sobre de error único `{ error: { code, message, correlationId, details? } }`. El detalle del pipeline (orden de middlewares, scopes, caps) está en [ARQUITECTURA](../../ARQUITECTURA.md) y [CONTRATOS](../../CONTRATOS.md).
 
 ---
 

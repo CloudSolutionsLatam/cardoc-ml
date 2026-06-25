@@ -149,7 +149,7 @@ Catalyst inyecta variables de entorno por environment. cardoc las usa para dos c
 | `ZOHO_CRM_ACCESS_TOKEN` | Secreto | **Placeholder de dev**; en prod lo reemplaza la Connection (§4) |
 | `ZOHO_CRM_CONNECTOR_NAME` | Config | Nombre del conector OAuth |
 
-El switch de modos vive en `container.ts` (`useDatastore`, `useZohoCrm`, `useCreator`). En modo dev (sin `datastore`) se siembra en memoria un consumidor + token (`Bearer test-token`, todos los scopes, Cuenta `acc_dev`) — útil para el smoke e2e, **nunca** para prod.
+El switch de modos vive en `container.ts` (`useDatastore`, `useZohoCrm`, `useCreator`). En modo dev (sin `datastore`) se siembra en memoria un consumidor + token (`X-Api-Key: test-token`, todos los scopes, Cuenta `acc_dev`) — útil para el smoke e2e, **nunca** para prod.
 
 > Nota de seguridad: `ZOHO_CRM_ACCESS_TOKEN` como env var es solo dev. La gestión real de secretos va por Connection + env vars del environment de Catalyst, no versionadas. Ver [`./secretos-y-connections.md`](./secretos-y-connections.md) y [`../../OPERACIONES.md`](../../OPERACIONES.md).
 
@@ -201,8 +201,8 @@ Flujo: copiar el `.example` a `.catalystrc` y completar con IDs reales, o dejar 
 | Fase | Qué pasa | Artefacto que toca |
 |---|---|---|
 | **init** | `catalyst init` vincula el clon local a un proyecto/env y escribe `.catalystrc` | `.catalystrc` |
-| **build** (pre-deploy, propio del repo) | `pnpm exec tsc -b` + `scripts/bundle-function.mjs` (esbuild → `index.js`, format `cjs`, target `node24`, externals `express` + `zcatalyst-sdk-node`) | `index.js`, `catalyst-config.json` (`main`) |
-| **deploy** | `catalyst deploy` lee `catalyst.json` (target `api`), sube el `index.js` bundleado e **instala solo los externals** desde el `package.json` de la función | `catalyst.json`, `package.json`, `catalyst-config.json` |
+| **build** (pre-deploy, propio del repo) | `pnpm exec tsc -b` + `scripts/bundle-function.mjs` (esbuild → `index.js`, format `cjs`, target `node24`, external `zcatalyst-sdk-node` (express inlineado)) | `index.js`, `catalyst-config.json` (`main`) |
+| **deploy** | `catalyst deploy` lee `catalyst.json` (target `api`), sube el `index.js` bundleado (autocontenido; el runtime de Catalyst provee `zcatalyst-sdk-node`) | `catalyst.json`, `package.json`, `catalyst-config.json` |
 
 El detalle por qué se bundlea (resolver `workspace:*` que npm no entiende en deploy) está en [`./monorepo-build-y-bundling.md`](./monorepo-build-y-bundling.md). El procedimiento operativo de deploy y rollback en [`./deploy-y-rollback.md`](./deploy-y-rollback.md).
 

@@ -90,7 +90,7 @@ Estado verificado en verde: `tsc -b`, 7 tests (vitest), eslint, bundle esbuild. 
 
 ## 3. Build del bundle desplegable
 
-Catalyst despliega un único `index.js` CommonJS por función. El bundling resuelve la fricción monorepo↔Catalyst: las deps `@cardoc/*` (`workspace:*`) se inlinean en el bundle; solo los externals (`express`, `zcatalyst-sdk-node`) los instala Catalyst en deploy desde el `package.json` de la función.
+Catalyst despliega un único `index.js` CommonJS por función. El bundling resuelve la fricción monorepo↔Catalyst: `express`, `zod` y los `@cardoc/*` (`workspace:*`) se **inlinan** en el bundle; el único external es `zcatalyst-sdk-node`, que **provee el runtime de Catalyst**. Catalyst **no** instala las deps del `package.json` (el smoke 2026-06-25 lo confirmó: externalizar `express` daba `Cannot find module 'express'`).
 
 ```bash
 pnpm --filter @cardoc/fn-api run build
@@ -109,10 +109,10 @@ Parámetros del bundle (en [`scripts/bundle-function.mjs`](../../scripts/bundle-
 | `entryPoints` | `src/index.ts` | `src/index.ts` hace `export = app` (CommonJS) |
 | `format` | `cjs` | Catalyst Advanced I/O carga CommonJS |
 | `platform` / `target` | `node` / `node24` | stack de la función |
-| `external` | `['express','zcatalyst-sdk-node']` | los instala Catalyst, no se inlinean |
+| `external` | `['zcatalyst-sdk-node']` | lo provee el runtime de Catalyst; express y el resto se inlinean |
 | `sourcemap` | `true` | genera `index.js.map` |
 
-Salida: `apps/catalyst/functions/api/index.js` (~195kb). **`index.js` e `index.js.map` están gitignored** (`.gitignore`: `apps/catalyst/functions/*/index.js`). Son artefacto de build, no se versionan — se regeneran en cada deploy.
+Salida: `apps/catalyst/functions/api/index.js` (~1.3 MB). **`index.js` e `index.js.map` están gitignored** (`.gitignore`: `apps/catalyst/functions/*/index.js`). Son artefacto de build, no se versionan — se regeneran en cada deploy.
 
 > Nota: `package.json` raíz declara `pnpm.onlyBuiltDependencies:['esbuild']` para que esbuild pueda compilar su binario nativo en install. Si el install se hizo con esa allowlist ausente, esbuild no estará listo y el bundle fallará.
 
@@ -190,7 +190,7 @@ Plantilla en [`.env.example`](../../.env.example). El `.env` local está gitigno
 | **dev (E-02/E-03)** | `datastore` | `zoho` | `creator` | a medida que los adapters dejen de ser stubs |
 | **prod** | `datastore` | `zoho` | `creator` | producción real |
 
-> Token de dev sembrado en memoria (solo con persistencia `memory`): `Bearer test-token` — todos los scopes, Cuenta `acc_dev`. **No existe en prod.** No usarlo para validar prod.
+> Token de dev sembrado en memoria (solo con persistencia `memory`): `X-Api-Key: test-token` — todos los scopes, Cuenta `acc_dev`. **No existe en prod.** No usarlo para validar prod.
 
 Setup de la Connection OAuth a CRM y residencia de la PII (UY/AR/Wyoming): ver [`./secretos-y-connections.md`](./secretos-y-connections.md) y open questions de plataforma (§9).
 
@@ -215,29 +215,29 @@ curl -sS -i "$BASE_URL/v1/health"
 
 Si health no responde 200, el deploy no levantó — no seguir con el resto.
 
-### 7.2 Los tres endpoints `/v1` (requieren Bearer + scope)
+### 7.2 Los tres endpoints `/v1` (requieren X-Api-Key + scope)
 
-`accountId` se resuelve SIEMPRE del token, nunca del payload/query. Usar un token válido del entorno (en dev con `memory`: `Bearer test-token`; en prod: un token real sembrado en `api_tokens`).
+`accountId` se resuelve SIEMPRE del token, nunca del payload/query. Usar un token válido del entorno (en dev con `memory`: `X-Api-Key: test-token`; en prod: un token real sembrado en `api_tokens`).
 
 | Endpoint | Método | Scope | Headers obligatorios | Smoke esperado (modos mock/seed) |
 |----------|--------|-------|----------------------|----------------------------------|
-| `/v1/opportunity-contact` | POST | `opportunities:create` | `Authorization: Bearer …`, `X-Idempotency-Key` (**obligatorio**), `Content-Type: application/json` | `200/201` en éxito; mismo key + payload distinto → `409 IDEMPOTENCY_CONFLICT` |
-| `/v1/informes` | GET | `reports:read` | `Authorization: Bearer …` | `200` con lista |
-| `/v1/informes/:id/pdf` | GET | `reports:pdf` | `Authorization: Bearer …` | `200` stream PDF; sin PDF → `404 PDF_NOT_AVAILABLE` |
+| `/v1/opportunity-contact` | POST | `opportunities:create` | `X-Api-Key: …`, `X-Idempotency-Key` (**obligatorio**), `Content-Type: application/json` | `200/201` en éxito; mismo key + payload distinto → `409 IDEMPOTENCY_CONFLICT` |
+| `/v1/informes` | GET | `reports:read` | `X-Api-Key: …` | `200` con lista |
+| `/v1/informes/:id/pdf` | GET | `reports:pdf` | `X-Api-Key: …` | `200` stream PDF; sin PDF → `404 PDF_NOT_AVAILABLE` |
 
 ```bash
 # POST opportunity-contact (X-Idempotency-Key OBLIGATORIO)
 curl -sS -i -X POST "$BASE_URL/v1/opportunity-contact" \
-  -H "Authorization: Bearer $TOKEN" \
+  -H "X-Api-Key: $TOKEN" \
   -H "X-Idempotency-Key: smoke-$(date +%s)" \
   -H "Content-Type: application/json" \
   -d '{ "...": "payload mínimo válido — ver CONTRATOS.md" }'
 
 # GET informes
-curl -sS -i "$BASE_URL/v1/informes" -H "Authorization: Bearer $TOKEN"
+curl -sS -i "$BASE_URL/v1/informes" -H "X-Api-Key: $TOKEN"
 
 # GET informe PDF (reemplazar :id por uno conocido)
-curl -sS -i "$BASE_URL/v1/informes/<id>/pdf" -H "Authorization: Bearer $TOKEN"
+curl -sS -i "$BASE_URL/v1/informes/<id>/pdf" -H "X-Api-Key: $TOKEN"
 ```
 
 El payload exacto de POST y los parámetros de listado están en [`../../CONTRATOS.md`](../../CONTRATOS.md).

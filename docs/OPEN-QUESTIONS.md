@@ -33,7 +33,7 @@ resultante al [log de ADRs](decisions/README.md) si corresponde.
 
 | ID | Pregunta | Bloquea | Estado |
 |----|----------|---------|--------|
-| **OQ-P1** | Streaming/chunked real y tope de payload en Advanced I/O (¿no buffea/trunca PDFs grandes?). | Confianza en AC-05 (stream PDF) | 🔴 abierta |
+| **OQ-P1** | Streaming en Advanced I/O. **✅ Resuelta (smoke 2026-06-25):** el PDF se streamea OK desde Catalyst (`application/pdf`, `%PDF`, `Cache-Control: no-store`). Tope de payload para PDFs muy grandes: aún por medir. | AC-05 (stream PDF) | ✅ resuelta (tope grande pendiente) |
 | **OQ-P2** | Atomicidad del increment en Catalyst Cache (para el cap distribuido). Hoy los contadores son in-memory por contenedor. | Cap global · [ADR-0011](decisions/README.md#adr-0011) | 🔴 abierta |
 | **OQ-P3** | Setup de la Connection OAuth a CRM (conector, scopes, DC) y API exacta del SDK para resolver el `accessToken` gestionado en runtime. | E-02 (auth CRM real) · [ADR-0004](decisions/README.md#adr-0004) | 🔴 abierta |
 | **OQ-P4** | Región/residencia de datos para la PII (jurisdicciones UY/AR/Wyoming). | Compliance pre-prod | 🔴 abierta |

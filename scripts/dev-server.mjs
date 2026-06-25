@@ -37,7 +37,7 @@ const server = app.listen(port, () => {
   console.log(`  modo: ${JSON.stringify(modo)}`);
   console.log(`  health: curl http://127.0.0.1:${port}/v1/health`);
   if (modo.persistencia !== "datastore") {
-    console.log(`  token dev: Authorization: Bearer test-token  (Cuenta acc_dev, todos los scopes)\n`);
+    console.log(`  token dev: X-Api-Key: test-token  (Cuenta acc_dev, todos los scopes)\n`);
   }
 });
 

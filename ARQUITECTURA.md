@@ -57,7 +57,7 @@ una superficie de integración delgada, auditable y desacoplable.
 │ Integración de   │      │  Advanced I/O Function `api`         │      │ Zoho CRM         │
 │ la automotora    │      │  (Express, Node 24, CommonJS)        │─────▶│  Contacts        │
 │                  │─────▶│                                      │◀─────│  Deals           │
-│ Bearer <token>   │      │  pipeline de middlewares (§4):       │      │  Accounts        │
+│ X-Api-Key: <token>   │      │  pipeline de middlewares (§4):       │      │  Accounts        │
 │ X-Idempotency-Key│◀─────│   json → correlation → audit →       │      ├──────────────────┤
 │ X-Correlation-Id │      │   attachContainer → auth → scope →   │─────▶│ Zoho Creator     │
 └──────────────────┘      │   cap → handler ; errors (último)    │◀─────│  app Informes    │
@@ -147,7 +147,7 @@ express.json
   → auditOnFinish           (global)  registra res.on("finish") — 1 registro/request
   → [por ruta]
       attachContainer                 compone repos+adapters para este request (buildContainer)
-      → authMiddleware                Bearer → hashToken → resuelve consumerId/accountId/scopes
+      → authMiddleware                X-Api-Key → hashToken → resuelve consumerId/accountId/scopes
       → requireScope(scope)           403 FORBIDDEN_SCOPE si el token no tiene el scope
       → cap(endpoint)                 cuenta hora/día/semana → 429 CAP_EXCEEDED
       → handler                       valida forma (Zod) + headers, llama al use-case
@@ -159,7 +159,7 @@ Detalles que importan, anclados al código:
 - **Correlación** (`middleware/auth.ts`): si el `X-Correlation-Id` entrante no matchea el
   regex UUID, se regenera con `randomUUID()`. Siempre se devuelve en la respuesta y se usa
   como hilo de toda la traza (auditoría, logs de error).
-- **Auth** (`authMiddleware`): toma el `Bearer`, lo hashea (`hashToken`) y resuelve la fila
+- **Auth** (`authMiddleware`): toma el `X-Api-Key`, lo hashea (`hashToken`) y resuelve la fila
   por hash (`tokens.resolveByHash`). El token plano nunca se persiste ni se loguea. Valida
   `revokedAt` y `expiresAt`; inválido/expirado/revocado → `401 UNAUTHENTICATED`. En éxito
   cuelga `consumerId`/`accountId`/`scopes` del request y hace `touchLastUsed`.
@@ -184,7 +184,7 @@ Todos los endpoints responden el error con la misma forma (`middleware/errors.ts
 | Código | HTTP | Cuándo |
 |--------|------|--------|
 | `VALIDATION_ERROR` | 400 | Falta `X-Idempotency-Key`; payload del POST no pasa el schema. |
-| `UNAUTHENTICATED` | 401 | Falta el Bearer, o token inválido/expirado/revocado. |
+| `UNAUTHENTICATED` | 401 | Falta el X-Api-Key, o token inválido/expirado/revocado. |
 | `FORBIDDEN_SCOPE` | 403 | Token sin el scope del endpoint. **Único** uso de 403. |
 | `NOT_FOUND` | 404 | Informe inexistente **o de otra Cuenta** (cross-tenant → 404, no 403). |
 | `PDF_NOT_AVAILABLE` | 404 | El informe existe pero su PDF no está disponible ni se pudo generar. |
@@ -235,7 +235,7 @@ consumidor/token.** La Oportunidad se crea en el módulo Deals, en estado fijo
 
 | Mecanismo | Implementación |
 |-----------|----------------|
-| Autenticación | Bearer token (`generateToken`: aleatorio ≥256 bits, base64url) → `sha256` (`hashToken`) → `api_tokens` resuelve `consumer_id` + `account_id` + `scopes`. El token plano nunca se persiste ni se loguea. |
+| Autenticación | X-Api-Key token (`generateToken`: aleatorio ≥256 bits, base64url) → `sha256` (`hashToken`) → `api_tokens` resuelve `consumer_id` + `account_id` + `scopes`. El token plano nunca se persiste ni se loguea. |
 | Autorización | `requireScope(scope)` por ruta: 403 `FORBIDDEN_SCOPE` si falta. Es el **único** uso de 403. |
 | `accountId` SIEMPRE del token | El `account_id` se resuelve en `authMiddleware` y se inyecta en cada use-case/repo como primer argumento. **Jamás** viene del payload/query. |
 | Cross-tenant → 404 | Pedir un informe de otra Cuenta no devuelve 403 (filtraría su existencia): el puerto filtra por `account_id` y devuelve `ReportNotFoundError` → **404 NOT_FOUND**. 403 queda reservado a scope. |
@@ -294,9 +294,9 @@ la ubicación. Si el stream falla **antes** del primer byte → 502 `UPSTREAM_ER
 
 - **TypeScript**: `pnpm exec tsc -b` (project references). Verde verificado en E-01.
 - **Bundling** (`scripts/bundle-function.mjs`): esbuild, `format: cjs`, `target: node24`,
-  `external: ['express', 'zcatalyst-sdk-node']`. Inlina los `@cardoc/*` (que `workspace:*`
-  no resuelve en deploy) y deja los externals para que Catalyst los instale del
-  `package.json` de la función. Genera `index.js` (~195 kb). Entry: `src/index.ts` hace
+  `external: ['zcatalyst-sdk-node']` (lo provee el runtime; require lazy en datastore mode).
+  Inlina `express`, `zod` y los `@cardoc/*`. **Catalyst NO instala las deps del `package.json`**
+  — por eso `express` va inlineado (el smoke 2026-06-25 lo confirmó). Genera `index.js` (~1.3 MB). Entry: `src/index.ts` hace
   `export = app` (CommonJS); Catalyst hace `require(main)`.
 - **Configs**: `apps/catalyst/catalyst.json` `{ functions: { source: 'functions',
   targets: ['api'] } }` · `functions/api/catalyst-config.json` `{ deployment: { name:'api',
@@ -324,7 +324,7 @@ y [docs/playbooks/monorepo-build-y-bundling.md](docs/playbooks/monorepo-build-y-
 | `ZOHO_CRM_ACCESS_TOKEN` | Placeholder de dev; en producción lo provee la Connection. |
 | `ZOHO_CRM_CONNECTOR_NAME` | Nombre del conector OAuth. |
 
-Token de dev sembrado en memoria: `Bearer test-token` (todos los scopes, Cuenta `acc_dev`).
+Token de dev sembrado en memoria: `X-Api-Key: test-token` (todos los scopes, Cuenta `acc_dev`).
 
 ## 10. Decisiones de arquitectura (ADR-style)
 
@@ -342,7 +342,7 @@ Confirmadas por Nestor Toñanez, 2026-06-25.
 | 7 | **Auditoría on-finish, 1 registro/request, append-only** | Auditar dentro de cada use-case | Captura `httpStatus`/`latencyMs` ya conocidos al cierre; cubre también los GET (sin use-case) y los errores tempranos (401/403/429). |
 | 8 | **Adapter de streaming/SDK en la capa function**, no en `packages/*` | Meter el SDK/stream en `persistence` o `providers` | Mantiene la regla hexagonal: dominio/puertos sin SDK; `persistence` usa el DataStore por tipado estructural. El sistema corre completo en local sin Catalyst. |
 | 9 | **HTTP externo solo en `providers`** (adapters `Zoho*`) | Llamar a Zoho desde use-cases o rutas | Aísla el upstream tras un puerto: los Mock permiten e2e sin Zoho, y los adapters reales entran en E-02/E-03 sin tocar el resto. |
-| 10 | **Bundle esbuild con externals** (`express`, `zcatalyst-sdk-node`) | `npm install` de `workspace:*` en deploy | Catalyst no entiende `workspace:*`; inlinar los `@cardoc/*` y dejar solo los externals resuelve la fricción monorepo↔Catalyst con un único `index.js`. |
+| 10 | **Bundle esbuild: inlina todo salvo `zcatalyst-sdk-node`** (express incluido; SDK del runtime, lazy) | externalizar `express` (Catalyst no instala las deps del `package.json`) | Smoke 2026-06-25: `express` external daba `Cannot find module`. Único external = `zcatalyst-sdk-node`. |
 | 11 | **Contadores de cap in-memory por ahora** | Bloquear E-01 hasta tener Catalyst Cache | E-01 entrega un cap funcional por-instancia; el cap distribuido (Catalyst Cache, increment atómico) es de-risk pre-producción — ⚠️ verificar. |
 
 ## 11. Pendientes de validación (de-risk pre-producción)

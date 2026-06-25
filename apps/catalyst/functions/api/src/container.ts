@@ -10,7 +10,6 @@
  *
  * Los adapters concretos (con SDK Catalyst / HTTP) viven en esta capa, NO en packages/*.
  */
-import catalyst = require("zcatalyst-sdk-node");
 import { ALL_SCOPES, hashToken } from "@cardoc/domain";
 import {
   createCatalystRepositories,
@@ -21,6 +20,7 @@ import {
   InMemoryTokensRepository,
   type AuditLogRepository,
   type CapRepository,
+  type CatalystAppLike,
   type ConsumersRepository,
   type OpportunitiesRepository,
   type TokensRepository,
@@ -113,7 +113,9 @@ export function buildContainer(req: unknown): ApiContainer {
   const reports: ReportsSource = useCreator ? new ZohoCreatorReportsSource() : memReports;
 
   if (useDatastore) {
-    const app = catalyst.initialize(req as { [key: string]: unknown });
+    // El SDK de Catalyst lo provee el runtime; se carga LAZY (en memory mode no se requiere).
+    const catalyst = require("zcatalyst-sdk-node") as { initialize(req: unknown): CatalystAppLike };
+    const app = catalyst.initialize(req);
     const repos = createCatalystRepositories(app);
     return { ...repos, crm, connection: resolveCrmConnection(app), reports, mlCenter };
   }

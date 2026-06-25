@@ -22,7 +22,7 @@ Fuente en disco:
 
 | Tabla (DataStore) | Entidad de dominio | Rol | Mutabilidad |
 |---|---|---|---|
-| `api_tokens` | `ApiToken` | Autenticación: hash del Bearer → Cuenta + scopes | INSERT / UPDATE |
+| `api_tokens` | `ApiToken` | Autenticación: hash del X-Api-Key → Cuenta + scopes | INSERT / UPDATE |
 | `consumers` | `Consumer` | Una automotora = una Cuenta CRM = un consumidor | INSERT / UPDATE |
 | `crm_opportunities` | `OpportunityRecord` | Red de idempotencia del POST (AC-08) | INSERT / UPDATE |
 | `audit_log` | `AuditLogEntry` | Bitácora 1-registro/request (AC-09) | **INSERT-only (append-only)** |
@@ -184,7 +184,7 @@ Para levantar el DataStore de un entorno limpio (nuevo proyecto Catalyst). Mecá
 - [ ] **UNIQUE(account_id, idempotency_key)** en `crm_opportunities` — **paso que no se puede saltear** ([§4](#4-constraints-que-se-crean-a-mano-crítico)).
 - [ ] UNIQUE/índices recomendados del inventario de [§4](#inventario-de-constraintsíndices-a-crear-a-mano).
 - [ ] **`audit_log` como append-only de hecho:** restringir permisos de UPDATE/DELETE del rol de la función si la plataforma lo permite → ⚠️ verificar (consola Catalyst).
-- [ ] **Sembrar `consumers` + `api_tokens`** del primer consumidor real (en dev hay un token sembrado en memoria: `Bearer test-token`, Cuenta `acc_dev`, todos los scopes — vía `seed()` del fake, **no** toca el DataStore).
+- [ ] **Sembrar `consumers` + `api_tokens`** del primer consumidor real (en dev hay un token sembrado en memoria: `X-Api-Key: test-token`, Cuenta `acc_dev`, todos los scopes — vía `seed()` del fake, **no** toca el DataStore).
 - [ ] **`consumer_caps`** opcional: si no hay fila, el middleware cae a `CARDOC_CAP_DEFAULT_HOUR/DAY/WEEK`. Crear filas solo para overrides por consumidor.
 - [ ] **Variable de entorno** `CARDOC_PERSISTENCE=datastore` en el entorno con DataStore (vs `memory` para local/tests). Ver [secretos-y-connections.md](secretos-y-connections.md).
 - [ ] **Smoke de verificación del UNIQUE:** disparar dos veces el POST con el mismo `X-Idempotency-Key` y verificar que el segundo devuelve `created: false` / 409 — **no** una segunda fila. Es la única prueba real de que el constraint existe.

@@ -174,7 +174,7 @@ Atajos equivalentes:
 | Etapa | Comando | Entrada | Salida |
 |-------|---------|---------|--------|
 | Compilar el monorepo | `pnpm exec tsc -b` | `packages/*/src`, `apps/.../api/src` | un `dist/` con `.js` + `.d.ts` por proyecto |
-| Bundlear la función | `node scripts/bundle-function.mjs api` (cwd = carpeta de la función) | `apps/.../api/src/index.ts` + deps `@cardoc/*` | `apps/.../api/index.js` (~195 kb) + `index.js.map` |
+| Bundlear la función | `node scripts/bundle-function.mjs api` (cwd = carpeta de la función) | `apps/.../api/src/index.ts` + deps `@cardoc/*` | `apps/.../api/index.js` (~1.3 MB) + `index.js.map` |
 | Desplegar | `catalyst deploy` | `index.js` + `package.json` de la función | función `api` en el env activo |
 
 El comando que junta los dos primeros pasos en uno, tal como lo declara `@cardoc/fn-api`:
@@ -220,8 +220,8 @@ await build({
   target: "node24",
   format: "cjs",
   sourcemap: true,
-  // Catalyst los instala en deploy desde el package.json de la función → no se inlinean.
-  external: ["express", "zcatalyst-sdk-node"],
+  // zcatalyst-sdk-node lo provee el runtime; express y el resto se inlinean (Catalyst no instala deps).
+  external: ["zcatalyst-sdk-node"],
   logLevel: "info",
 });
 ```
@@ -234,17 +234,17 @@ Decisiones, una por una:
 | `format` | `cjs` | La función expone `export = app` (CommonJS); Catalyst Advanced I/O carga el módulo como CJS. |
 | `target` | `node24` | El runtime del stack es node24 (ver `catalyst-config.json`). No transpilar de más. |
 | `platform` | `node` | Resolución y builtins de Node, no de browser. |
-| `external` | `["express", "zcatalyst-sdk-node"]` | **No se inlinean.** Catalyst los instala en deploy desde las `dependencies` del `package.json` de la función. |
+| `external` | `["zcatalyst-sdk-node"]` | **No se inlinea.** Lo provee el runtime de Catalyst. (`express` y el resto SÍ se inlinean: Catalyst **no** instala las deps del `package.json`.) |
 | `sourcemap` | `true` | Genera `index.js.map` para que los stack traces de runtime mapeen al TS. |
 
 ### 4.3 La frontera externals vs. inlineados
 
 Es la línea que hay que entender:
 
-- **Externals (`express`, `zcatalyst-sdk-node`)** → quedan como `require(...)` en el bundle. Son las **únicas** dos `dependencies` reales del `package.json` de la función (versiones `express 4.19.2`, `zcatalyst-sdk-node ^3.2.0`). Catalyst las instala en su entorno. Externalizarlas mantiene el bundle chico y deja que el SDK de Catalyst sea el que provee la plataforma (no querés bundlear el SDK del host).
+- **External (solo `zcatalyst-sdk-node`)** → queda como `require(...)` en el bundle (lazy, en datastore mode); lo provee el runtime de Catalyst. `express` y el resto se **inlinan** porque Catalyst **no** instala las deps del `package.json` (el smoke lo confirmó: `express` external → `Cannot find module`). No bundlear el SDK del host.
 - **Inlineado (todo el resto)** → `@cardoc/*` y sus dependencias transitivas que vienen del registry (p.ej. `zod`, que usa `@cardoc/domain`) se copian dentro de `index.js`. Por eso el `package.json` desplegado no las necesita.
 
-Resultado: un `index.js` autocontenido (~195 kb) que en runtime solo hace `require("express")` y `require("zcatalyst-sdk-node")` — dos módulos que Catalyst garantiza presentes. Cero `workspace:*`, cero `node_modules` interno que llevar.
+Resultado: un `index.js` autocontenido (~1.3 MB) que en runtime solo hace `require("zcatalyst-sdk-node")` (lazy, en datastore mode) — que el runtime de Catalyst provee (express va inlineado). Cero `workspace:*`, cero `node_modules` interno que llevar.
 
 > Corolario de diseño: el adapter de streaming / SDK vive **en la capa function**, no en `packages/*`. Los packages son Node puro y testeables; el acoplamiento a Catalyst se concentra en `fn-api`, que es justamente lo que el bundle empaqueta. Ver [`../../ARQUITECTURA.md`](../../ARQUITECTURA.md).
 
@@ -257,7 +257,7 @@ El bundle por sí solo no se despliega: Catalyst necesita su metadata. Los tres 
 | Archivo | Rol |
 |---------|-----|
 | `index.js` (generado) | El bundle CJS que ejecuta el runtime. `catalyst-config.json` lo apunta con `execution.main`. |
-| `package.json` | Declara las `dependencies` que Catalyst instala (`express`, `zcatalyst-sdk-node`) y `main: index.js`. |
+| `package.json` | Declara `main: index.js`. (Catalyst **no** instala estas deps en deploy — el bundle es autocontenido salvo `zcatalyst-sdk-node`, que provee el runtime.) |
 | `catalyst-config.json` | `{ deployment: { name: "api", stack: "node24", type: "advancedio" }, execution: { main: "index.js" } }` |
 
 A nivel proyecto, `apps/catalyst/catalyst.json` declara qué functions se despliegan:
@@ -314,7 +314,7 @@ pnpm -r run test      # 7 tests (vitest)
 pnpm lint             # eslint .
 
 # 4. Bundlear la función para deploy
-pnpm --filter @cardoc/fn-api run build   # tsc -b + esbuild → index.js (~195 kb)
+pnpm --filter @cardoc/fn-api run build   # tsc -b + esbuild → index.js (~1.3 MB)
 
 # 5. Deploy (desde apps/catalyst, con .catalystrc vinculado)
 catalyst deploy

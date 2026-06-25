@@ -29,10 +29,11 @@ Convención: si una ADR crece o necesita discusión extensa, se separa a su prop
 | [0007](#adr-0007) | Auditoría on-finish, 1 registro/request, append-only | Aceptada |
 | [0008](#adr-0008) | Adapter de streaming/SDK en la capa function | Aceptada |
 | [0009](#adr-0009) | HTTP externo solo en `packages/providers` | Aceptada |
-| [0010](#adr-0010) | Bundle esbuild con externals | Aceptada |
+| [0010](#adr-0010) | Bundle esbuild: inlina todo salvo `zcatalyst-sdk-node` (SDK del runtime) | Aceptada (revisado en smoke) |
 | [0011](#adr-0011) | Contadores de cap in-memory por ahora | Aceptada (provisional) |
 | [0012](#adr-0012) | PDF: resolución perezosa con caché en Creator/WorkDrive | Aceptada (mecanismo de generación pendiente) |
 | [0013](#adr-0013) | Integración OUTBOUND a ML (CRM workflow → función Catalyst) | Aceptada |
+| [0014](#adr-0014) | Auth del consumidor por header `X-Api-Key` (Catalyst reserva `Authorization`) | Aceptada |
 
 > Confirmadas por Nestor Toñanez, 2026-06-25.
 
@@ -97,10 +98,13 @@ Convención: si una ADR crece o necesita discusión extensa, se separa a su prop
 - **Descartado:** llamar a Zoho desde use-cases o rutas.
 
 ## ADR-0010
-**Bundle esbuild con externals** (`express`, `zcatalyst-sdk-node`).
-- **Contexto:** Catalyst no entiende `workspace:*` al instalar las deps de la función.
-- **Consecuencia:** se inlinean los `@cardoc/*` y se dejan solo los externals → un único `index.js` desplegable. Ver `scripts/bundle-function.mjs` y [build/bundling](../playbooks/monorepo-build-y-bundling.md).
-- **Descartado:** `npm install` de `workspace:*` en deploy.
+**Bundle esbuild: inlinar todo salvo `zcatalyst-sdk-node`.** El único external es
+`zcatalyst-sdk-node` (lo provee el runtime de Catalyst; require **lazy**, solo en datastore
+mode); `express`, `zod` y los `@cardoc/*` se INLINAN en el `index.js`.
+- **Estado:** Aceptada — **revisado tras el smoke (2026-06-25)**: externalizar `express` daba `Cannot find module 'express'` en runtime → **Catalyst NO instala las `dependencies` del `package.json`** de la función. Lo único garantizado por la plataforma es el SDK.
+- **Contexto:** el deploy necesita un `index.js` autosuficiente; `workspace:*` no resuelve y `express` no está en el runtime.
+- **Consecuencia:** `external: ['zcatalyst-sdk-node']` en `scripts/bundle-function.mjs`; bundle ~1.3 MB. Ver [build/bundling](../playbooks/monorepo-build-y-bundling.md).
+- **Descartado:** externalizar `express` (no lo instala Catalyst); bundlear el SDK (lo provee el host).
 
 ## ADR-0011
 **Contadores de cap in-memory por ahora** (por contenedor caliente).
@@ -126,3 +130,10 @@ notifica a ML (MLCenter/AutoCheck) los cambios de estado de la solicitud vía
 - **Contexto:** el cambio de estado nace en CRM (`Deal.Stage`); hay que avisarle a ML con auth JWT (token 1h).
 - **Consecuencia:** un workflow del CRM dispara (webhook con shared-secret) la ruta interna `POST /v1/internal/deal-estado`; la función mapea `Stage→Estado` y llama a `MlCenterClient` (login JWT cacheado + POST). Lógica en código versionado, secretos en Catalyst. Ver `packages/providers/src/mlcenter-client.ts`, `packages/application/src/notify-estado-change.ts`, [`../playbooks/integracion-mlcenter.md`](../playbooks/integracion-mlcenter.md).
 - **Descartado:** Deluge en CRM (código en plataforma, secretos en CRM); cron/poll (no event-driven).
+
+## ADR-0014
+**Auth del consumidor por header `X-Api-Key`, NO `Authorization`.**
+- **Estado:** Aceptada — **descubierto en el smoke en Catalyst (2026-06-25)**.
+- **Contexto:** Catalyst **reserva el header `Authorization`** y lo valida como token OAuth de Zoho; un `Authorization: Bearer <nuestro-token>` devuelve `INVALID_TOKEN` ANTES de llegar a la función (aun con Security Rules `authentication: optional`).
+- **Consecuencia:** el token del consumidor viaja en `X-Api-Key`; `authMiddleware` lo lee de ahí. La function debe tener Security Rules `authentication: optional` (Catalyst no exige token propio) → nuestra auth (`X-Api-Key` + scope + tenancy + cap) es la protección real. Verificado en el smoke: `X-Api-Key` pasa limpio, `Authorization` lo intercepta Catalyst. Ver `apps/catalyst/functions/api/src/middleware/auth.ts`.
+- **Descartado:** `Authorization: Bearer` (lo intercepta Catalyst).

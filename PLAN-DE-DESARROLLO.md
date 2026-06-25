@@ -55,7 +55,7 @@ demuestra (no a una afirmación).
 | **AC-02** | Validación de forma: payload y query validados con Zod; query `.strict()` rechaza filtros fuera de allowlist → 422 | ✅ E-01 | `packages/domain/src/schemas.ts` (`opportunityContactSchema`, `listInformesQuerySchema.strict()`); `routes/informes.ts` |
 | **AC-03** | Sobre de error único `{ error: { code, message, correlationId, details? } }` con el catálogo completo de códigos/status | ✅ E-01 | `apps/catalyst/functions/api/src/middleware/errors.ts` (`ApiError`, `errorMiddleware`); ver [CONTRATOS.md](CONTRATOS.md) |
 | **AC-04** | Correlación: `X-Correlation-Id` validado como UUID o regenerado, propagado en respuesta y auditoría | ✅ E-01 | `middleware/auth.ts` (`correlationMiddleware`, `UUID_RE`) |
-| **AC-05** | Autenticación Bearer: solo se persiste el `sha256` del token; token plano nunca se loguea ni guarda; vigencia (expiración/revocación) chequeada | ✅ E-01 (in-memory); 🟡 E-02 (DataStore real) | `middleware/auth.ts` (`authMiddleware`, `hashToken`), `packages/domain/src/tokens.ts`, `packages/persistence/src/entities.ts` |
+| **AC-05** | Autenticación X-Api-Key: solo se persiste el `sha256` del token; token plano nunca se loguea ni guarda; vigencia (expiración/revocación) chequeada | ✅ E-01 (in-memory); 🟡 E-02 (DataStore real) | `middleware/auth.ts` (`authMiddleware`, `hashToken`), `packages/domain/src/tokens.ts`, `packages/persistence/src/entities.ts` |
 | **AC-06** | Tenancy: `accountId` resuelto SIEMPRE del token, nunca del payload/query | ✅ E-01 | `middleware/auth.ts` (setea `req.accountId` del token), use-cases reciben `accountId` del `ctx`, no del body |
 | **AC-07** | Cap configurable hora/día/semana por consumidor+endpoint → 429 `CAP_EXCEEDED` con `Retry-After` | 🟡 E-01 (in-memory por contenedor); ⬜ E-04 (distribuido en Cache) | `middleware/cap.ts` (3 ventanas, headers `X-Cap-*`, `Retry-After`) |
 | **AC-08** | Idempotencia POST: `UNIQUE(account_id, idempotency_key)` + `payloadFingerprint`; misma clave+payload distinto → 409; idempotencia por tenant | ✅ E-01 (lógica + tests); 🟡 E-02 (UNIQUE físico en DataStore) | `packages/application/src/create-opportunity-contact.ts`, `packages/domain/src/idempotency.ts`, `packages/persistence/src/catalyst.ts` (`insertIfAbsent`), test `create-opportunity-contact.test.ts` (4 casos) |
@@ -96,7 +96,7 @@ Estado de hecho, documentado para trazabilidad. Lo construido y en verde:
 | `@cardoc/persistence` | Entities, repositorios (puertos), `catalyst.ts` (impl DataStore por tipado estructural, sin importar el SDK), `memory.ts` (fakes) | `packages/persistence/src/{entities,repositories,catalyst,memory}.ts` |
 | `@cardoc/application` | Use-cases `createOpportunityContact`, `listInformes`, `streamReportPdf` | `packages/application/src/*.ts` |
 | `@cardoc/fn-api` | Function Advanced I/O (stack node24): `index.ts` → `export = app` (CommonJS), `app.ts` arma el Express; pipeline de middlewares de orden fijo | `apps/catalyst/functions/api/src/*` |
-| CI + bundle | Workflow con typecheck/test/lint/secret-scan; `bundle-function.mjs` (esbuild, cjs, target node24, externals `express`+`zcatalyst-sdk-node`) → `index.js` (~195kb) | `.github/workflows/ci.yml`, `scripts/bundle-function.mjs` |
+| CI + bundle | Workflow con typecheck/test/lint/secret-scan; `bundle-function.mjs` (esbuild, cjs, target node24, external `zcatalyst-sdk-node` (express inline)) → `index.js` (~1.3 MB) | `.github/workflows/ci.yml`, `scripts/bundle-function.mjs` |
 
 **Verificación en verde (toolchain real)**:
 
@@ -198,7 +198,7 @@ Confirmado en el repo:
 # 1) Compilar el monorepo (project references)
 pnpm exec tsc -b
 
-# 2) Bundlear la function (esbuild → index.js cjs, externals express + zcatalyst-sdk-node)
+# 2) Bundlear la function (esbuild → index.js cjs, external zcatalyst-sdk-node (express inlineado))
 pnpm --filter @cardoc/fn-api run build
 
 # 3) Primera vez: vincular proyecto/env (genera .catalystrc, gitignored)
@@ -238,7 +238,7 @@ nunca en el repo.
 | `ZOHO_CRM_ACCESS_TOKEN` | fallback dev-only; **no figura en `.env.example`** (en prod lo resuelve la Connection) | `dev-token` |
 | `ZOHO_CRM_CONNECTOR_NAME` | nombre del conector | `zoho_crm_conn` |
 
-Token de dev sembrado en memoria: `Bearer test-token` (todos los scopes, Cuenta `acc_dev`).
+Token de dev sembrado en memoria: `X-Api-Key: test-token` (todos los scopes, Cuenta `acc_dev`).
 Esquema completo del DataStore en
 [docs/playbooks/datastore-esquema.md](docs/playbooks/datastore-esquema.md); manejo de la Connection
 OAuth y secretos en [docs/playbooks/secretos-y-connections.md](docs/playbooks/secretos-y-connections.md).

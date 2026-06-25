@@ -36,7 +36,7 @@ Documentos relacionados: [README](README.md) · [ARQUITECTURA](ARQUITECTURA.md) 
 
 | Header | Dirección | Obligatorio | Semántica |
 |---|---|---|---|
-| `Authorization: Bearer <token>` | request | Sí (excepto `/v1/health`) | Token opaco. Se compara solo por **hash** (`hashToken`, `auth.ts`); el token plano nunca se persiste ni se loguea. |
+| `X-Api-Key: <token>` | request | Sí (excepto `/v1/health`) | Token opaco. Se compara solo por **hash** (`hashToken`, `auth.ts`); el token plano nunca se persiste ni se loguea. |
 | `X-Idempotency-Key` | request | **Solo** en `POST /v1/opportunity-contact` | Clave de idempotencia del consumidor. Ver §6. |
 | `X-Correlation-Id` | request (opcional) / response (siempre) | No | Si llega y es UUID válido se propaga; si no, se regenera (`correlationMiddleware`). Siempre vuelve en la respuesta y aparece en el sobre de error y en `audit_log`. |
 | `X-Cap-Window` / `X-Cap-Limit` / `X-Cap-Remaining` | response | — | Estado del cap más ajustado de las 3 ventanas (`cap.ts`). Ver §7. |
@@ -56,7 +56,7 @@ express.json
   → correlationMiddleware      (valida/regenera X-Correlation-Id; setea startMs + header)
   → auditOnFinish              (global; 1 registro on-finish, ver §8)
   → [por ruta] attachContainer (compone repos + adapters)
-  → authMiddleware             (Bearer → consumer/account/scopes)
+  → authMiddleware             (X-Api-Key → consumer/account/scopes)
   → requireScope(scope)        (403 si falta el scope)
   → cap(endpoint)              (429 si excede; setea X-Cap-*)
   → handler
@@ -70,7 +70,7 @@ un 401/403 **no consume cap** (`cap.ts`, comentario AC-07).
 
 `authMiddleware` (`auth.ts`):
 
-1. Exige header `Authorization: Bearer <token>`. Sin él → `401 UNAUTHENTICATED`.
+1. Exige header `X-Api-Key: <token>`. Sin él → `401 UNAUTHENTICATED`.
 2. Resuelve `hashToken(token)` contra `api_tokens` (`tokens.resolveByHash`).
 3. Rechaza si la fila no existe, está revocada (`revoked_at`) o vencida (`expires_at < now`) → `401 UNAUTHENTICATED`.
 4. En éxito, cuelga del request: `consumerId`, `accountId`, `scopes[]`; y actualiza `last_used_at`.
@@ -89,7 +89,7 @@ estado fijo `Agendamiento Ready`. Idempotente por `X-Idempotency-Key`.
 |---|---|
 | **Método / path** | `POST /v1/opportunity-contact` |
 | **Scope requerido** | `opportunities:create` |
-| **Headers** | `Authorization: Bearer …` (oblig.) · `X-Idempotency-Key` (**oblig.**) · `X-Correlation-Id` (opc.) |
+| **Headers** | `X-Api-Key: …` (oblig.) · `X-Idempotency-Key` (**oblig.**) · `X-Correlation-Id` (opc.) |
 | **Cap (endpoint lógico)** | `opportunity-contact` |
 | **Handler** | `routes/opportunity-contact.ts` · use-case `createOpportunityContact` |
 
@@ -167,7 +167,7 @@ El handler traduce el `outcome` del use-case a HTTP. La semántica de idempotenc
 | HTTP | code | Cuándo |
 |---|---|---|
 | 400 | `VALIDATION_ERROR` | Falta `X-Idempotency-Key` (`details.header`) **o** body inválido / clave extra (`details.fields`). |
-| 401 | `UNAUTHENTICATED` | Sin Bearer o token inválido/revocado/vencido. |
+| 401 | `UNAUTHENTICATED` | Sin X-Api-Key o token inválido/revocado/vencido. |
 | 403 | `FORBIDDEN_SCOPE` | El token no tiene `opportunities:create` (`details.required`). |
 | 409 | `IDEMPOTENCY_CONFLICT` | Misma `X-Idempotency-Key` con payload distinto (`details.idempotencyKey`). Ver §6. |
 | 429 | `CAP_EXCEEDED` | Cap del endpoint excedido. `Retry-After` + `details.{window,limit,retryAfterSeconds}`. |
@@ -178,7 +178,7 @@ El handler traduce el `outcome` del use-case a HTTP. La semántica de idempotenc
 
 ```bash
 curl -i -X POST http://localhost:3000/v1/opportunity-contact \
-  -H "Authorization: Bearer test-token" \
+  -H "X-Api-Key: test-token" \
   -H "X-Idempotency-Key: order-2026-06-25-0001" \
   -H "X-Correlation-Id: f47ac10b-58cc-4372-a567-0e02b2c3d479" \
   -H "Content-Type: application/json" \
@@ -201,7 +201,7 @@ Lista los Informes de Revisión de la **Cuenta autenticada**, con filtros contro
 |---|---|
 | **Método / path** | `GET /v1/informes` |
 | **Scope requerido** | `reports:read` |
-| **Headers** | `Authorization: Bearer …` (oblig.) · `X-Correlation-Id` (opc.) |
+| **Headers** | `X-Api-Key: …` (oblig.) · `X-Correlation-Id` (opc.) |
 | **Cap (endpoint lógico)** | `informes-list` |
 | **Handler** | `routes/informes.ts` (`listInformesHandler`) · use-case `listInformes` |
 
@@ -249,7 +249,7 @@ ejemplo anterior refleja la salida del `MockReportsSource` (modo dev).
 
 | HTTP | code | Cuándo |
 |---|---|---|
-| 401 | `UNAUTHENTICATED` | Sin Bearer o token inválido. |
+| 401 | `UNAUTHENTICATED` | Sin X-Api-Key o token inválido. |
 | 403 | `FORBIDDEN_SCOPE` | Token sin `reports:read`. |
 | 422 | `UNPROCESSABLE` | Query param fuera de la allowlist o tipo inválido (`details.fields`). |
 | 429 | `CAP_EXCEEDED` | Cap `informes-list` excedido. |
@@ -260,14 +260,14 @@ ejemplo anterior refleja la salida del `MockReportsSource` (modo dev).
 
 ```bash
 curl -i "http://localhost:3000/v1/informes?estado=completado&limit=10" \
-  -H "Authorization: Bearer test-token"
+  -H "X-Api-Key: test-token"
 ```
 
 Forzar 422 (param fuera de la allowlist, p.ej. intentar filtrar por Cuenta):
 
 ```bash
 curl -i "http://localhost:3000/v1/informes?accountId=otra-cuenta" \
-  -H "Authorization: Bearer test-token"
+  -H "X-Api-Key: test-token"
 # → 422 UNPROCESSABLE
 ```
 
@@ -282,7 +282,7 @@ interna de WorkDrive.
 |---|---|
 | **Método / path** | `GET /v1/informes/:id/pdf` |
 | **Scope requerido** | `reports:pdf` |
-| **Headers** | `Authorization: Bearer …` (oblig.) · `X-Correlation-Id` (opc.) |
+| **Headers** | `X-Api-Key: …` (oblig.) · `X-Correlation-Id` (opc.) |
 | **Cap (endpoint lógico)** | `informes-pdf` |
 | **Handler** | `routes/informes.ts` (`streamPdfHandler`) · use-case `streamReportPdf` |
 
@@ -313,7 +313,7 @@ bytes → se destruye la conexión (no se puede reescribir el status).
 
 | HTTP | code | Cuándo |
 |---|---|---|
-| 401 | `UNAUTHENTICATED` | Sin Bearer o token inválido. |
+| 401 | `UNAUTHENTICATED` | Sin X-Api-Key o token inválido. |
 | 403 | `FORBIDDEN_SCOPE` | Token sin `reports:pdf`. |
 | 404 | `NOT_FOUND` | Informe inexistente **o de otra Cuenta** (`ReportNotFoundError`). |
 | 404 | `PDF_NOT_AVAILABLE` | El informe existe pero su PDF no está disponible ni se pudo generar (`PdfNotAvailableError`, `details.informeId`). |
@@ -325,7 +325,7 @@ bytes → se destruye la conexión (no se puede reescribir el status).
 
 ```bash
 curl -i -L "http://localhost:3000/v1/informes/acc_dev-INF-001/pdf" \
-  -H "Authorization: Bearer test-token" \
+  -H "X-Api-Key: test-token" \
   -o informe.pdf
 ```
 
@@ -362,7 +362,7 @@ curl -i http://localhost:3000/v1/health
 ```
 
 > **Token de dev (modo in-memory).** `CARDOC_PERSISTENCE` ≠ `datastore` siembra un consumidor/token
-> de dev (`container.ts`): `Bearer test-token`, **todos los scopes**, consumidor `consumer_dev`,
+> de dev (`container.ts`): `X-Api-Key: test-token`, **todos los scopes**, consumidor `consumer_dev`,
 > Cuenta `acc_dev`. Solo para local/dev — no existe en `datastore` mode.
 
 ---
@@ -402,7 +402,7 @@ registre; y loguea **solo** `correlationId + método + path + code` (nunca paylo
 | HTTP | code | Cuándo / origen |
 |---|---|---|
 | 400 | `VALIDATION_ERROR` | Falta `X-Idempotency-Key` o body inválido en POST (`opportunity-contact.ts`, `ApiError(400,…)`). `details`: `header` o `fields`. |
-| 401 | `UNAUTHENTICATED` | Sin Bearer / token inválido/revocado/vencido (`auth.ts`). |
+| 401 | `UNAUTHENTICATED` | Sin X-Api-Key / token inválido/revocado/vencido (`auth.ts`). |
 | 403 | `FORBIDDEN_SCOPE` | Token sin el scope requerido (`requireScope`, `auth.ts`). `details.required`. **Único** caso de 403. |
 | 404 | `NOT_FOUND` | Recurso inexistente o **de otra Cuenta** (`ReportNotFoundError` → `errors.ts`). Cross-tenant = 404 por decisión (§9). |
 | 404 | `PDF_NOT_AVAILABLE` | Informe existe pero sin PDF disponible/generable (`PdfNotAvailableError`). `details.informeId`. |

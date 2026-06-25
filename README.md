@@ -58,7 +58,7 @@ Monorepo **pnpm workspaces** + TypeScript, ports & adapters (hexagonal).
 
 ## Seguridad y tenancy
 
-- **Bearer token por integración** con scopes; solo se persiste el `sha256` del token.
+- **X-Api-Key token por integración** con scopes; solo se persiste el `sha256` del token.
 - **Tenancy**: el `accountId` (Cuenta CRM = automotora) se resuelve SIEMPRE del token,
   nunca del payload/query. Acceso cruzado → **404** (no 403).
 - **Secretos solo backend**: credenciales en Catalyst Environment Variables; el repo nunca
@@ -90,7 +90,7 @@ curl http://127.0.0.1:3030/v1/health
 # PORT=3031 pnpm dev   para cambiar el puerto (3000 suele tenerlo la API del ERP / NestJS)
 ```
 
-Por defecto: persistencia in-memory + Mock CRM/Reports/ML, token de dev `Bearer test-token`
+Por defecto: persistencia in-memory + Mock CRM/Reports/ML, token de dev `X-Api-Key: test-token`
 (todos los scopes, Cuenta `acc_dev`). Para apuntar a servicios reales flipeá los flags y
 cargá los secretos en `.env` ([.env.example](.env.example); se carga con `--env-file-if-exists`).
 Lo único atado a Catalyst es el adapter DataStore (solo con `CARDOC_PERSISTENCE=datastore`);

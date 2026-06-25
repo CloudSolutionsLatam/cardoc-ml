@@ -28,7 +28,7 @@ consola/docs oficiales de Catalyst antes de operar en producción (ver [§8](#8-
 
 | Entorno | Proyecto Catalyst | Persistencia | CRM / Reports | Uso |
 |---------|-------------------|--------------|---------------|-----|
-| `local` | — (sin Catalyst) | `memory` | `mock` / `mock` | Desarrollo en máquina. Token sembrado `Bearer test-token` (todos los scopes, Cuenta `acc_dev`). |
+| `local` | — (sin Catalyst) | `memory` | `mock` / `mock` | Desarrollo en máquina. Token sembrado `X-Api-Key: test-token` (todos los scopes, Cuenta `acc_dev`). |
 | `dev` | cardoc-dev ⚙️ | `datastore` | `mock`/`mock` o adapters reales en sandbox | Integración + smoke e2e en plataforma real. |
 | `prod` | cardoc-prod ⚙️ | `datastore` | `zoho` / `creator` | Automotoras reales — **solo** se llega por pipeline. |
 
@@ -78,8 +78,8 @@ pnpm --filter @cardoc/fn-api run build   # tsc -b (project references) + esbuild
 ```
 
 El build corre `tsc -b` y luego `scripts/bundle-function.mjs` (esbuild, `format: cjs`,
-`target: node24`, `external: ['express','zcatalyst-sdk-node']`) → genera
-`apps/catalyst/functions/api/index.js` bundleado (~195 kb). Ese `index.js` está
+`target: node24`, `external: ['zcatalyst-sdk-node']`) → genera
+`apps/catalyst/functions/api/index.js` bundleado (~1.3 MB). Ese `index.js` está
 **gitignored**: se regenera en cada deploy, nunca se versiona. El root `package.json`
 fija `pnpm.onlyBuiltDependencies: ['esbuild']`.
 

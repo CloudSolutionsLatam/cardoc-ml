@@ -19,8 +19,10 @@ await build({
   target: "node24",
   format: "cjs",
   sourcemap: true,
-  // Catalyst los instala en deploy desde el package.json de la función → no se inlinean.
-  external: ["express", "zcatalyst-sdk-node"],
+  // SOLO zcatalyst-sdk-node es external: lo provee el runtime de Catalyst. El resto
+  // (express, zod, @cardoc/*) se INLINEA — Catalyst NO instala las deps del package.json,
+  // así que externalizar express daba "Cannot find module 'express'" en runtime.
+  external: ["zcatalyst-sdk-node"],
   logLevel: "info",
 });
 

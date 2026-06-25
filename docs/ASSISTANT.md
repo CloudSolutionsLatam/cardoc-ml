@@ -246,7 +246,7 @@ cardoc-ml/
 ├── apps/catalyst/
 │   ├── catalyst.json                      targets: ['api']
 │   └── functions/api/  @cardoc/fn-api      Advanced I/O: index.ts(export=app) · app.ts · container.ts · middleware/* · routes/*
-├── scripts/bundle-function.mjs            esbuild → index.js (externals express + zcatalyst-sdk-node)
+├── scripts/bundle-function.mjs            esbuild → index.js (external zcatalyst-sdk-node (express inlineado))
 ├── ARQUITECTURA.md · CONTRATOS.md · ATRIBUTOS-DE-CALIDAD.md · OPERACIONES.md · PLAN-DE-DESARROLLO.md
 └── docs/
     ├── ASSISTANT.md  (este archivo) · README.md (índice) · OPEN-QUESTIONS.md (registro único)
@@ -260,7 +260,7 @@ cardoc-ml/
 - **Local (sin Catalyst):** `pnpm dev` (compila + `scripts/dev-server.mjs`) levanta el
   mismo `app` Express standalone en `:3030` (`PORT=` para cambiarlo; 3000 lo suele tener
   el ERP/NestJS). Por defecto `CARDOC_PERSISTENCE=memory` + `*_MODE=mock`; token de dev
-  `Bearer test-token` (todos los scopes, Cuenta `acc_dev`). En `datastore` mode **no** se
+  `X-Api-Key: test-token` (todos los scopes, Cuenta `acc_dev`). En `datastore` mode **no** se
   siembra ningún token: sin sembrar uno, todo responde `401`.
 - **Smoke:** levantar el app Express compilado (`require` de `apps/catalyst/functions/api/dist/index.js`)
   y `fetch` a los endpoints. El `index.js` es CommonJS (`export = app`); por eso el mismo
