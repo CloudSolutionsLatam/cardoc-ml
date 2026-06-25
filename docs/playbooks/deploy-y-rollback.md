@@ -35,6 +35,21 @@ E-01 (scaffold) está completo y es **deployable**. La lógica de dominio y los 
 
 Cronograma del sprint: 22/06 → 03/07/2026. Owner: Nestor Toñanez. Equipo: 1 dev.
 
+**Ya desplegado:** la función `api` está viva en el proyecto **ML** (env Development),
+`https://ml-909785950.development.catalystserverless.com/server/api/`, modo `memory+mock`,
+**smoke remoto 12/12 verde** (2026-06-25).
+
+---
+
+## Gotchas de plataforma (verificados en el smoke del 2026-06-25 — NO volver a caer)
+
+Cuatro cosas que rompieron el primer deploy y su solución definitiva. **Leer antes de cada deploy nuevo:**
+
+1. **El CLI de Catalyst necesita la CA del sistema.** Toda invocación a `catalyst` (no solo `pnpm`) rompe en TLS en la red de Unicorp (`unable to verify the first certificate`) → prefijar **`NODE_OPTIONS=--use-system-ca`**.
+2. **Catalyst NO instala las `dependencies` del `package.json`.** Externalizar `express` daba `Cannot find module 'express'` en runtime. → el bundle **inlina express**; el único external es **`zcatalyst-sdk-node`** (lo provee el runtime) + require lazy. Ver §3 y [ADR-0010](../decisions/README.md#adr-0010).
+3. **Catalyst reserva el header `Authorization`** (lo valida como OAuth Zoho → `INVALID_TOKEN`, antes de llegar a la función). → la auth del consumidor va en **`X-Api-Key`**, nunca `Authorization`. Ver [ADR-0014](../decisions/README.md#adr-0014).
+4. **La función debe ser pública** para que gobierne NUESTRA auth: Security Rules `authentication: optional` (si queda `required`, Catalyst gatea con su token). Ver §4.5.
+
 ---
 
 ## 1. Prerequisitos (una sola vez por máquina)
@@ -43,7 +58,8 @@ Cronograma del sprint: 22/06 → 03/07/2026. Owner: Nestor Toñanez. Equipo: 1 d
 |-----------|------------------|------------------|
 | Node | `24` (`.nvmrc` = `24`; CI usa `node-version: 24`; validado en `24.13`) | `node -v` |
 | pnpm | `10.29.2` (campo `packageManager` en `package.json`) | `pnpm -v` |
-| Catalyst CLI | requerido para `init`/`deploy` | `catalyst --version` — «⚠️ verificar (docs oficiales/consola)» el nombre exacto del flag de versión |
+| Catalyst CLI | **`1.26.0`** (confirmado) | `catalyst --version` |
+| Sesión del CLI | logueado como `administracion2@cardoc.com.uy`, org Unicorp `909785950` | `NODE_OPTIONS=--use-system-ca catalyst whoami` |
 | Acceso a la consola Catalyst | proyecto + entorno dev y prod | login en la consola |
 
 > **GOTCHA — red corporativa con CA propia (intercepción TLS).** En la red de Unicorp, el `pnpm install` local rompe en la verificación TLS. Hay que cargar la CA del sistema:
@@ -54,7 +70,7 @@ Cronograma del sprint: 22/06 → 03/07/2026. Owner: Nestor Toñanez. Equipo: 1 d
 >
 > Esto **solo aplica al entorno local**. En CI (`.github/workflows/ci.yml`) el install corre `pnpm install --frozen-lockfile` sobre runner GitHub sin la intercepción, así que ahí no se usa el flag.
 
-Login al CLI de Catalyst: «⚠️ verificar (docs oficiales/consola)» el comando exacto de autenticación del CLI (`catalyst login` u equivalente) y si abre navegador o usa token.
+Login al CLI: **`catalyst login`** (confirmado) — abre el navegador (OAuth). La sesión persiste; `catalyst whoami` muestra el usuario. Todos los comandos del CLI van con `NODE_OPTIONS=--use-system-ca` en la red corporativa.
 
 ---
 
@@ -123,10 +139,13 @@ Detalle completo del bundling en [`./monorepo-build-y-bundling.md`](./monorepo-b
 ## 4. Vinculación del proyecto Catalyst (primera vez)
 
 ```bash
-catalyst init
+# 'catalyst init' es INTERACTIVO (pide seleccionar org). El camino no-interactivo verificado:
+cd apps/catalyst
+NODE_OPTIONS=--use-system-ca catalyst project:use 57305000000083001 --org 909785950
+# → escribe apps/catalyst/.catalystrc (proyecto ML 57305000000083001, env Development). Logueá antes con 'catalyst login'.
 ```
 
-`catalyst init` vincula la carpeta al proyecto/entorno de Catalyst y genera el `.catalystrc` (binding local con IDs de proyecto/env). Reglas de versionado:
+`project:use`/`init` vinculan la carpeta al proyecto/entorno y generan el `.catalystrc` (binding local con IDs de proyecto/env). Reglas de versionado:
 
 - **`.catalystrc` está gitignored** (`.gitignore`: `.catalystrc`). Contiene IDs del binding local — no se versiona.
 - Se versiona en cambio `.catalystrc.example` (presente en `apps/catalyst/.catalystrc.example`): plantilla del binding con placeholders y `timezone: America/Montevideo`.
@@ -142,6 +161,14 @@ Estructura de configs que el deploy lee (ver [`./catalyst-artefactos.md`](./cata
 
 Timezone del proyecto: `America/Montevideo`.
 
+### 4.5 Hacer la función pública (Security Rules) — obligatorio para una API externa
+
+Por defecto Catalyst gatea la función con su propia auth (`authentication: required`) → devuelve `INVALID_TOKEN` antes de llegar a Express. Para que la gobierne NUESTRA auth (`X-Api-Key` + scope + tenancy + cap):
+
+> **Consola → Serverless → Functions → `api` → Security Rules → ruta `.*` → `authentication: optional`** (methods `GET, POST`).
+
+Las security rules **viven en la consola** (se autogeneran en el deploy), NO en `catalyst.json` ni en el repo. Con `optional`, cualquiera alcanza la URL → la protección real es la auth de la app. Por eso en prod hay que setear un `INTERNAL_WEBHOOK_SECRET` real (la ruta `/v1/internal/*` también queda pública, protegida solo por el shared-secret).
+
 ---
 
 ## 5. Deploy a dev
@@ -152,15 +179,14 @@ Orden estricto: **build → deploy**. Nunca `catalyst deploy` sin un `index.js` 
 # 1. Asegurar binding apuntando al entorno dev (ver §4)
 # 2. Regenerar el bundle desde cero
 pnpm --filter @cardoc/fn-api run build
-# 3. Desplegar
-catalyst deploy
+# 3. Desplegar (verificado): solo la función api, sin lifecycle scripts, con CA del sistema
+cd apps/catalyst
+NODE_OPTIONS=--use-system-ca catalyst deploy --only functions:api --ignore-scripts
 ```
 
-`catalyst deploy` confirmado como comando. «⚠️ verificar (docs oficiales/consola)»:
+**Verificado (2026-06-25):** `catalyst deploy --only functions:api` despliega solo esa función; `--ignore-scripts` evita hooks de lifecycle. El deploy imprime la **FUNCTION URL**: `https://<project>-<org>.development.catalystserverless.com/server/<fn>/` — para cardoc: `https://ml-909785950.development.catalystserverless.com/server/api/`.
 
-- Si `catalyst deploy` admite seleccionar función/target (p.ej. `--function api`) o despliega todo lo de `catalyst.json`.
-- Si existe un flag de despliegue selectivo por target.
-- El formato exacto del identificador de versión/bundle que devuelve el deploy (load-bearing para el rollback — ver §8).
+«⚠️ verificar» todavía: el identificador de versión/bundle que devuelve el deploy y el mecanismo de **rollback nativo** (ver §8).
 
 Las variables de entorno **no van en el repo ni en el bundle**: se cargan en la consola del entorno (§6).
 
@@ -202,7 +228,7 @@ Smoke = una verificación de humo, no una suite. Un request por endpoint contra 
 
 > No existe (todavía) un script de smoke automatizado en el repo. Esto es un procedimiento manual. El "smoke e2e 16/16" verificado del proyecto se corrió fuera del repo; formalizar como script es follow-up (§10).
 
-Base URL del entorno: «⚠️ verificar (consola)» la URL pública de la función Advanced I/O por entorno (dev y prod).
+Base URL (dev, verificado): `https://ml-909785950.development.catalystserverless.com/server/api`. Formato: `https://<project>-<org>.<env>.catalystserverless.com/server/<fn>`. El smoke se corre con `node fetch` + `NODE_OPTIONS=--use-system-ca` (curl choca con la CA corporativa).
 
 ### 7.1 Health (abierto, sin auth) — primero siempre
 
