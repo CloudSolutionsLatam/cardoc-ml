@@ -226,7 +226,10 @@ Setup de la Connection OAuth a CRM y residencia de la PII (UY/AR/Wyoming): ver [
 
 Smoke = una verificación de humo, no una suite. Un request por endpoint contra el entorno recién desplegado. **Se corre en dev tras el deploy a dev, y se repite en prod tras el deploy a prod.** Si cualquiera falla → no se promueve a prod / se dispara rollback.
 
-> No existe (todavía) un script de smoke automatizado en el repo. Esto es un procedimiento manual. El "smoke e2e 16/16" verificado del proyecto se corrió fuera del repo; formalizar como script es follow-up (§10).
+> Smoke versionado en el repo: **`pnpm smoke`** (local, in-process — 19 checks) y
+> **`NODE_OPTIONS=--use-system-ca pnpm smoke:catalyst`** (contra la URL desplegada — 12 checks;
+> override `BASE=<url>`). Verificados en verde el 2026-06-25 (19/19 y 12/12). Las secciones
+> 7.1–7.3 documentan qué cubre cada check, por si querés correrlos a mano con `curl`.
 
 Base URL (dev, verificado): `https://ml-909785950.development.catalystserverless.com/server/api`. Formato: `https://<project>-<org>.<env>.catalystserverless.com/server/<fn>`. El smoke se corre con `node fetch` + `NODE_OPTIONS=--use-system-ca` (curl choca con la CA corporativa).
 

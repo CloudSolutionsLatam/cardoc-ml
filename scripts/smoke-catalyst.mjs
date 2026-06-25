@@ -1,0 +1,54 @@
+// Smoke e2e contra la función DESPLEGADA en Catalyst (modo memory+mock).
+// Uso: NODE_OPTIONS=--use-system-ca pnpm smoke:catalyst   (la CA del sistema es necesaria
+// en la red corporativa). Override de destino: BASE=<url> pnpm smoke:catalyst
+const base = process.env.BASE || "https://ml-909785950.development.catalystserverless.com/server/api";
+let pass = 0, fail = 0;
+const check = (name, cond, extra = "") =>
+  cond ? (pass++, console.log(`  PASS  ${name}`)) : (fail++, console.log(`  FAIL  ${name}  ${extra}`));
+
+const AUTH = { "X-Api-Key": "test-token" };
+const body = { contact: { documento: "1", nombre: "Ana" }, opportunity: { nombre: "Rev" } };
+
+console.log(`base = ${base}\n`);
+
+// Warm-up (cold start): reintentar health hasta 200.
+for (let i = 1; i <= 10; i++) {
+  try { const r = await fetch(`${base}/v1/health`); if (r.status === 200) break; } catch { /* retry */ }
+  await new Promise((s) => setTimeout(s, 2500));
+}
+
+let r = await fetch(`${base}/v1/health`);
+let j = await r.json().catch(() => ({}));
+check("GET /v1/health → 200 {status:ok}", r.status === 200 && j.status === "ok", `${r.status}`);
+
+r = await fetch(`${base}/v1/informes`);
+check("GET /v1/informes sin token → 401", r.status === 401, `${r.status}`);
+
+const idem = { ...AUTH, "Content-Type": "application/json", "X-Idempotency-Key": "cat-1" };
+r = await fetch(`${base}/v1/opportunity-contact`, { method: "POST", headers: idem, body: JSON.stringify(body) });
+j = await r.json().catch(() => ({}));
+check("POST opportunity-contact → 201 created", r.status === 201 && j.status === "created", `${r.status} ${JSON.stringify(j)}`);
+check("  stage 'Agendamiento Ready' server-side", j?.opportunity?.stage === "Agendamiento Ready");
+check("  X-Correlation-Id presente", Boolean(r.headers.get("x-correlation-id")));
+
+r = await fetch(`${base}/v1/opportunity-contact`, { method: "POST", headers: idem, body: JSON.stringify(body) });
+j = await r.json().catch(() => ({}));
+check("POST repetido misma clave → 200 duplicate", r.status === 200 && j.status === "duplicate", `${r.status}`);
+
+r = await fetch(`${base}/v1/informes`, { headers: AUTH });
+j = await r.json().catch(() => ({}));
+check("GET /v1/informes → 200 data[]", r.status === 200 && Array.isArray(j.data), `${r.status}`);
+check("  X-Cap-Remaining presente", Boolean(r.headers.get("x-cap-remaining")));
+
+r = await fetch(`${base}/v1/informes/acc_dev-INF-001/pdf`, { headers: AUTH });
+const buf = Buffer.from(await r.arrayBuffer());
+check("GET /v1/informes/:id/pdf → 200 application/pdf (streaming)", r.status === 200 && r.headers.get("content-type") === "application/pdf", `${r.status} ${r.headers.get("content-type")}`);
+check("  cuerpo es un PDF (%PDF)", buf.toString("utf8").startsWith("%PDF"));
+check("  Cache-Control: no-store", r.headers.get("cache-control") === "no-store");
+
+r = await fetch(`${base}/v1/informes/acc_otra-INF-9/pdf`, { headers: AUTH });
+j = await r.json().catch(() => ({}));
+check("PDF de cuenta ajena → 404 NOT_FOUND (tenancy)", r.status === 404 && j?.error?.code === "NOT_FOUND", `${r.status}`);
+
+console.log(`\nRESULT (Catalyst): ${pass} passed, ${fail} failed`);
+process.exit(fail === 0 ? 0 : 1);
