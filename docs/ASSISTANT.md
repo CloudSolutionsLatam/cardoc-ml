@@ -21,8 +21,12 @@ dice al asistente qué abrir para cada tipo de tarea.
 
 Una **API en Zoho Catalyst** (Advanced I/O) que actúa de **gateway** delante de Zoho
 para las automotoras: crea Contacto+Oportunidad en **CRM**, lista Informes de Revisión
-de **Creator** y entrega su **PDF** (Creator/WorkDrive). El nombre dice "ml" pero **no
-hay machine learning** en el alcance. Detalle: [`../ARQUITECTURA.md`](../ARQUITECTURA.md).
+de **Creator** y entrega su **PDF** (Creator/WorkDrive). El nombre dice "ml" pero **no es
+machine learning**: **ML = la plataforma MLCenter / "Mi Auto"·"TuAuto"** (`mlcenter.com.uy`,
+producto **AutoCheck** = inspecciones de vehículos), con quien la integración es
+**bidireccional** (ML carga solicitudes → Oportunidades; cardoc le notifica los cambios de
+estado). Detalle: [`../ARQUITECTURA.md`](../ARQUITECTURA.md) · integración:
+[`playbooks/integracion-mlcenter.md`](playbooks/integracion-mlcenter.md).
 
 > **Estado (2026-06-25): E-01 completo y deployable.** Verde verificado: `tsc -b`,
 > 7 tests, `eslint`, smoke e2e 16/16, bundle esbuild. La lógica de E-02/E-03 (use-cases
@@ -80,6 +84,23 @@ Abrí en orden:
 4. El use-case en `packages/application/src/` y, si hace falta, el puerto en `providers`/`persistence`.
 5. Schema Zod del request en `packages/domain/src/schemas.ts` (usá `.strict()` para que
    un parámetro fuera de la allowlist sea `422`).
+
+### "Tocar la notificación de estado a ML (outbound)"
+
+ML (MLCenter/AutoCheck) espera que cardoc le avise los cambios de estado. Disparo: CRM
+workflow (on `Deal.Stage` change) → `POST /v1/internal/deal-estado` (shared-secret) →
+`MlCenterClient`. Abrí en orden:
+
+1. [`playbooks/integracion-mlcenter.md`](playbooks/integracion-mlcenter.md) — contrato del
+   endpoint AutoCheck, flujo y mapeo. [ADR-0013](decisions/README.md#adr-0013).
+2. `packages/providers/src/mlcenter-client.ts` — adapter (login JWT cacheado + `updateEstado`).
+3. `packages/application/src/notify-estado-change.ts` — `STAGE_TO_ESTADO` (placeholder, ver
+   [OQ-N6](OPEN-QUESTIONS.md)) + regla `LinkResultado` para FINALIZADO.
+4. `apps/catalyst/functions/api/src/routes/internal.ts` + `requireInternalSecret` en
+   `.../middleware/auth.ts`.
+
+Bloqueado para activar: mapeo Stage→Estado (OQ-N6), origen del LinkResultado (OQ-N7),
+credenciales (OQ-P9). El `NroSolicitud` de ML = External ID de la Oportunidad.
 
 Regla: el handler traduce HTTP ↔ dominio; la lógica vive en el use-case; el efecto
 externo, detrás de un puerto.
@@ -230,7 +251,7 @@ cardoc-ml/
 └── docs/
     ├── ASSISTANT.md  (este archivo) · README.md (índice) · OPEN-QUESTIONS.md (registro único)
     ├── decisions/    README.md (log de ADRs)
-    ├── playbooks/    catalyst-artefactos · monorepo-build-y-bundling · deploy-y-rollback · secretos-y-connections · datastore-esquema
+    ├── playbooks/    catalyst-artefactos · monorepo-build-y-bundling · deploy-y-rollback · secretos-y-connections · datastore-esquema · integracion-mlcenter
     └── runbooks/     _template.md
 ```
 

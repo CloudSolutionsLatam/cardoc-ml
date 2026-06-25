@@ -39,6 +39,7 @@ calidad, operaciones, plan, contratos) viven en la raíz del repo; acá están l
 | [playbooks/deploy-y-rollback.md](playbooks/deploy-y-rollback.md) | Pipeline de deploy (CI → dev → smoke → prod) y rollback |
 | [playbooks/secretos-y-connections.md](playbooks/secretos-y-connections.md) | Secretos en Environment Variables + Connection OAuth a Zoho CRM + rotación de tokens |
 | [playbooks/datastore-esquema.md](playbooks/datastore-esquema.md) | Esquema de tablas del DataStore + UNIQUE/índices a crear en consola |
+| [playbooks/integracion-mlcenter.md](playbooks/integracion-mlcenter.md) | Integración con ML (MLCenter/AutoCheck): inbound + outbound (notificación de estados) |
 
 ## Runbooks — qué hacer cuando algo falla
 

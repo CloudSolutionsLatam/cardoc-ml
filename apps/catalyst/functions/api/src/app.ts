@@ -14,6 +14,7 @@ import {
   attachContainer,
   authMiddleware,
   correlationMiddleware,
+  requireInternalSecret,
   requireScope,
 } from "./middleware/auth";
 import { auditOnFinish } from "./middleware/audit";
@@ -21,6 +22,7 @@ import { cap } from "./middleware/cap";
 import { errorMiddleware } from "./middleware/errors";
 import { opportunityContactHandler } from "./routes/opportunity-contact";
 import { listInformesHandler, streamPdfHandler } from "./routes/informes";
+import { dealEstadoHandler } from "./routes/internal";
 
 const app: express.Express = express();
 app.use(express.json());
@@ -58,6 +60,10 @@ app.get(
   cap("informes-pdf"),
   streamPdfHandler,
 );
+
+// Ruta interna (CRM workflow → Catalyst): notifica a ML el cambio de estado del Deal.
+// Shared-secret (x-internal-secret), sin Bearer ni scopes.
+app.post("/v1/internal/deal-estado", attachContainer, requireInternalSecret, dealEstadoHandler);
 
 app.all("/", (_req: Request, res: Response): void => {
   res.status(200).send("cardoc api: live");

@@ -4,3 +4,4 @@
 export * from "./create-opportunity-contact";
 export * from "./list-informes";
 export * from "./stream-pdf";
+export * from "./notify-estado-change";

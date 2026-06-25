@@ -21,8 +21,8 @@ Convención: si una ADR crece o necesita discusión extensa, se separa a su prop
 | ADR | Decisión | Estado |
 |-----|----------|--------|
 | [0001](#adr-0001) | Catalyst como gateway de control delante de Zoho | Aceptada |
-| [0002](#adr-0002) | Idempotencia = `X-Idempotency-Key` del consumidor (estilo Stripe) | Aceptada |
-| [0003](#adr-0003) | Dedup de Contacto por Documento (CI/RUT) | Aceptada |
+| [0002](#adr-0002) | Idempotencia = External ID de la agenda (`NroSolicitud`) tomado del body | Aceptada |
+| [0003](#adr-0003) | Dedup de Contacto por Email | Aceptada |
 | [0004](#adr-0004) | Auth a Zoho CRM vía Catalyst Connection (OAuth gestionado) | Aceptada |
 | [0005](#adr-0005) | Cross-tenant → 404 (no 403) | Aceptada |
 | [0006](#adr-0006) | `accountId` siempre del token | Aceptada |
@@ -32,6 +32,7 @@ Convención: si una ADR crece o necesita discusión extensa, se separa a su prop
 | [0010](#adr-0010) | Bundle esbuild con externals | Aceptada |
 | [0011](#adr-0011) | Contadores de cap in-memory por ahora | Aceptada (provisional) |
 | [0012](#adr-0012) | PDF: resolución perezosa con caché en Creator/WorkDrive | Aceptada (mecanismo de generación pendiente) |
+| [0013](#adr-0013) | Integración OUTBOUND a ML (CRM workflow → función Catalyst) | Aceptada |
 
 > Confirmadas por Nestor Toñanez, 2026-06-25.
 
@@ -45,17 +46,19 @@ Convención: si una ADR crece o necesita discusión extensa, se separa a su prop
 - **Descartado:** CRM/Creator como única capa, sin gateway.
 
 ## ADR-0002
-**Idempotencia = `X-Idempotency-Key` del consumidor** como clave; `UNIQUE(account_id,
-idempotency_key)` + `payload_fingerprint` para misma-clave-payload-distinto → `409` (estilo Stripe).
-- **Contexto:** el POST crea Contacto+Oportunidad; un reintento no debe duplicar.
-- **Consecuencia:** el consumidor controla el reintento; el `UNIQUE` es la red física anti-duplicación. Ver `packages/application/src/create-opportunity-contact.ts` + `packages/domain/src/idempotency.ts`.
-- **Descartado:** derivar la clave server-side del payload (no cumple "misma clave no duplica").
+**Idempotencia = External ID de la agenda (`NroSolicitud`) tomado del body.**
+`UNIQUE(account_id, external_id)` → un reintento no crea dos Oportunidades.
+- **Estado:** Aceptada (revisa la decisión previa de "header `X-Idempotency-Key` como clave").
+- **Contexto:** ML manda la solicitud AutoCheck con su `NroSolicitud`; ese número identifica la agenda y es el ancla de no-duplicación. El header `X-Idempotency-Key` puede coincidir, pero el **body es la fuente canónica**.
+- **Consecuencia:** el `external_id` se valida del body, es la clave del `UNIQUE`, y se persiste en un campo **External ID** del Deal (a crear en CRM). Ver `packages/application/src/create-opportunity-contact.ts`. **El scaffold E-01 todavía usa header-key — migrar en E-02.**
+- **Descartado:** el header como única clave (el consumidor real —ML— ancla en su `NroSolicitud`, que va en el body).
 
 ## ADR-0003
-**Dedup de Contacto por Documento (CI/RUT).** `documento` es requerido en el schema.
-- **Contexto:** "crear o reutilizar" Contacto necesita una llave de identidad estable.
-- **Consecuencia:** match por documento; `contact.reused` lo indica. Ver `packages/domain/src/schemas.ts`.
-- **Descartado:** dedup por email/teléfono (cambian y se comparten).
+**Dedup de Contacto por Email.**
+- **Estado:** Aceptada (revisa "Documento (CI/RUT)").
+- **Contexto:** el módulo `Contacts` del CRM **no tiene** un campo Documento/CI/RUT (verificado en el esquema, `discovery/modules/Contacts`). Además la notificación al cliente va por mail, así que el email es el identificador confiable.
+- **Consecuencia:** `findContactByDocument` pasa a buscar **por email** → reusar; si no, crear. Ver `packages/providers/src/crm-client.ts`.
+- **Descartado:** dedup por documento (no existe el campo) / por teléfono.
 
 ## ADR-0004
 **Auth a Zoho CRM = Catalyst Connection** (OAuth gestionado por la plataforma).
@@ -114,3 +117,12 @@ lleno (link WorkDrive) stream; si vacío → generar el PDF en Catalyst → writ
 - **Contexto:** confirmado por Nestor; el PDF puede no existir aún al pedirlo.
 - **Consecuencia:** la lógica vive en `ReportsSource.openPdf` (adapter); el handler ya pipea sin exponer URL/ruta interna. Ver `packages/providers/src/reports-source.ts`.
 - **Descartado:** asumir que el PDF siempre existe / servir el link de WorkDrive directo al consumidor.
+
+## ADR-0013
+**Integración OUTBOUND a ML: CRM workflow → función Catalyst → `MlCenterClient`.** cardoc
+notifica a ML (MLCenter/AutoCheck) los cambios de estado de la solicitud vía
+`POST /api/autocheck/estado/actualizar`.
+- **Estado:** Aceptada (trigger confirmado por Nestor 2026-06-25). Mapeo de estados y credenciales pendientes ([OQ-N6/N7](../OPEN-QUESTIONS.md), [OQ-P9](../OPEN-QUESTIONS.md)).
+- **Contexto:** el cambio de estado nace en CRM (`Deal.Stage`); hay que avisarle a ML con auth JWT (token 1h).
+- **Consecuencia:** un workflow del CRM dispara (webhook con shared-secret) la ruta interna `POST /v1/internal/deal-estado`; la función mapea `Stage→Estado` y llama a `MlCenterClient` (login JWT cacheado + POST). Lógica en código versionado, secretos en Catalyst. Ver `packages/providers/src/mlcenter-client.ts`, `packages/application/src/notify-estado-change.ts`, [`../playbooks/integracion-mlcenter.md`](../playbooks/integracion-mlcenter.md).
+- **Descartado:** Deluge en CRM (código en plataforma, secretos en CRM); cron/poll (no event-driven).

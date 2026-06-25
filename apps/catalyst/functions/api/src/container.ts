@@ -27,17 +27,21 @@ import {
 } from "@cardoc/persistence";
 import {
   MockCrmClient,
+  MockMlCenterClient,
   MockReportsSource,
+  MlCenterHttpClient,
   ZohoCreatorReportsSource,
   ZohoCrmClient,
   type CrmClient,
   type CrmConnection,
+  type MlCenterClient,
   type ReportsSource,
 } from "@cardoc/providers";
 
 const useDatastore = process.env["CARDOC_PERSISTENCE"] === "datastore";
 const useZohoCrm = process.env["CARDOC_CRM_MODE"] === "zoho";
 const useCreator = process.env["CARDOC_REPORTS_MODE"] === "creator";
+const useMlHttp = process.env["CARDOC_ML_MODE"] === "http";
 
 const DEV_CONSUMER = "consumer_dev";
 const DEV_ACCOUNT = "acc_dev";
@@ -52,6 +56,8 @@ export interface ApiContainer {
   crm: CrmClient;
   connection: CrmConnection;
   reports: ReportsSource;
+  /** Cliente OUTBOUND a ML (MLCenter/AutoCheck) — notificación de cambios de estado. */
+  mlCenter: MlCenterClient;
 }
 
 // ── Singletons in-memory (modo dev/local), sembrados una vez ──────────────────
@@ -62,6 +68,15 @@ const memAudit = new InMemoryAuditLogRepository();
 const memCap = new InMemoryCapRepository();
 const memCrm = new MockCrmClient();
 const memReports = new MockReportsSource();
+
+// Cliente ML (singleton: el adapter HTTP cachea el JWT ~1h). Mock por defecto.
+const mlCenter: MlCenterClient = useMlHttp
+  ? new MlCenterHttpClient({
+      baseUrl: process.env["MLCENTER_BASE_URL"] ?? "https://www.mlcenter.com.uy/ApiMiAutoTesting",
+      usuario: process.env["MLCENTER_USER"] ?? "",
+      password: process.env["MLCENTER_PASSWORD"] ?? "",
+    })
+  : new MockMlCenterClient();
 
 if (!useDatastore) {
   memTokens.seed({
@@ -100,7 +115,7 @@ export function buildContainer(req: unknown): ApiContainer {
   if (useDatastore) {
     const app = catalyst.initialize(req as { [key: string]: unknown });
     const repos = createCatalystRepositories(app);
-    return { ...repos, crm, connection: resolveCrmConnection(app), reports };
+    return { ...repos, crm, connection: resolveCrmConnection(app), reports, mlCenter };
   }
   return {
     tokens: memTokens,
@@ -111,5 +126,6 @@ export function buildContainer(req: unknown): ApiContainer {
     crm,
     connection: resolveCrmConnection(req),
     reports,
+    mlCenter,
   };
 }

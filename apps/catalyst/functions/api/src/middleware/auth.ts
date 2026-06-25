@@ -92,3 +92,17 @@ export function requireScope(scope: Scope) {
     next();
   };
 }
+
+/**
+ * Protege rutas internas (CRM → Catalyst) con un shared-secret (`x-internal-secret`),
+ * no con Bearer: es una llamada de confianza, no de un consumidor público.
+ */
+export function requireInternalSecret(req: AuthedRequest, _res: Response, next: NextFunction): void {
+  const expected = process.env["INTERNAL_WEBHOOK_SECRET"] ?? "dev-internal-secret";
+  const got = req.header("x-internal-secret") ?? "";
+  if (got !== expected) {
+    next(new ApiError(401, "UNAUTHENTICATED", "internal secret inválido"));
+    return;
+  }
+  next();
+}

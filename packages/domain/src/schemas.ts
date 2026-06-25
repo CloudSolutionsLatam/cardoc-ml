@@ -52,3 +52,18 @@ export const listInformesQuerySchema = z
   .strict();
 
 export type ListInformesQueryInput = z.infer<typeof listInformesQuerySchema>;
+
+// ── POST /v1/internal/deal-estado (CRM → Catalyst, integración OUTBOUND con ML) ──
+
+export const dealEstadoSchema = z
+  .object({
+    /** Nº de solicitud AutoCheck = External ID de la Oportunidad. */
+    nroSolicitud: z.coerce.number().int().positive(),
+    /** Valor del Stage del Deal en CRM (se mapea a Estado de ML). */
+    stage: z.string().min(1),
+    linkResultado: z.string().url().optional(),
+    observaciones: z.string().max(500).optional(),
+  })
+  .strict();
+
+export type DealEstadoInput = z.infer<typeof dealEstadoSchema>;
