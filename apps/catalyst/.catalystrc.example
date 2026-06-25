@@ -1,0 +1,26 @@
+{
+  "//": "PLANTILLA. Copiar a .catalystrc (gitignored) y completar con los IDs reales del proyecto. Lo genera/actualiza `catalyst init` al vincular el proyecto. NUNCA versionar el real: liga el repo a un proyecto/env concreto.",
+  "defaults": {
+    "project": 1,
+    "env": 1
+  },
+  "actives": {
+    "project": 1,
+    "env": 1
+  },
+  "projects": [
+    {
+      "idx": 1,
+      "id": "<CATALYST_PROJECT_ID>",
+      "name": "Cardoc-API",
+      "domain": {
+        "id": "<DOMAIN_ID>",
+        "name": "<project>.development"
+      },
+      "timezone": "America/Montevideo",
+      "env": [
+        { "idx": 1, "id": "<DEV_ENV_ID>", "name": "Development", "type": 3 }
+      ]
+    }
+  ]
+}

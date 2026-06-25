@@ -1,0 +1,7 @@
+# Monorepo cardoc — pnpm workspaces.
+# Cada glob es un workspace independiente con su propio package.json.
+packages:
+  # Librerías compartidas: dominio puro, puertos+adapters de proveedores, persistencia, use-cases.
+  - "packages/*"
+  # Catalyst Advanced I/O functions (cada una se despliega por separado).
+  - "apps/catalyst/functions/*"

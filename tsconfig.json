@@ -1,0 +1,11 @@
+{
+  "//": "Solution file: solo referencias a proyectos. No compila nada por sí mismo. `tsc -b` recorre el grafo.",
+  "files": [],
+  "references": [
+    { "path": "packages/domain" },
+    { "path": "packages/providers" },
+    { "path": "packages/persistence" },
+    { "path": "packages/application" },
+    { "path": "apps/catalyst/functions/api" }
+  ]
+}

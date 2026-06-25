@@ -1,0 +1,21 @@
+{
+  "name": "@cardoc/domain",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Dominio puro de cardoc: tipos, schemas (Zod), idempotencia, tokens. Node.js puro — NO importa nada de Catalyst (lock-in de plataforma = 0).",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -b",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "5.4.5",
+    "vitest": "^1.6.0"
+  }
+}

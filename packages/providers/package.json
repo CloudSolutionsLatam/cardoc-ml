@@ -1,0 +1,20 @@
+{
+  "name": "@cardoc/providers",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Puertos CrmClient + ReportsSource y sus adapters. ÚNICO lugar del repo con HTTP externo (Zoho CRM, Zoho Creator, WorkDrive).",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -b",
+    "test": "echo \"(sin tests aún — contract tests contra sandbox en Fase 1)\" && exit 0"
+  },
+  "dependencies": {
+    "@cardoc/domain": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "5.4.5"
+  }
+}

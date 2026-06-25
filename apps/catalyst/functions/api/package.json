@@ -1,0 +1,25 @@
+{
+  "name": "@cardoc/fn-api",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Catalyst Advanced I/O — API pública /v1/* (opportunity-contact, informes, pdf). Auth por Bearer token scoped por consumidor + tenancy por Cuenta.",
+  "main": "index.js",
+  "scripts": {
+    "typecheck": "tsc -b",
+    "build": "tsc -b && node ../../../../scripts/bundle-function.mjs api"
+  },
+  "dependencies": {
+    "express": "4.19.2",
+    "zcatalyst-sdk-node": "^3.2.0"
+  },
+  "devDependencies": {
+    "@cardoc/application": "workspace:*",
+    "@cardoc/domain": "workspace:*",
+    "@cardoc/persistence": "workspace:*",
+    "@cardoc/providers": "workspace:*",
+    "@types/express": "^4.17.21",
+    "@types/node": "^24.0.0",
+    "esbuild": "^0.21.5",
+    "typescript": "5.4.5"
+  }
+}

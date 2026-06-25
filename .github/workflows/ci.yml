@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+    branches: [main, "feat/**"]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4 # lee la versión de pnpm de package.json (packageManager)
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24 # el runtime de Catalyst (node24)
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Typecheck
+        run: pnpm -r run typecheck
+      - name: Test
+        run: pnpm -r run test
+      - name: Lint (fronteras hexagonales)
+        run: pnpm run lint
+
+  # Secret scanning como gate. Corre el binario directo (sin la licencia del action wrapper).
+  secret-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # historia completa
+      - name: gitleaks
+        run: >
+          docker run --rm -v "${{ github.workspace }}:/repo"
+          ghcr.io/gitleaks/gitleaks:latest detect --source=/repo --redact --no-banner

@@ -1,0 +1,30 @@
+# Dependencias
+node_modules/
+.pnpm-store/
+
+# Build / artefactos TS
+dist/
+*.tsbuildinfo
+*.js.map
+
+# Bundles de las Catalyst functions (generados por esbuild en deploy — NO versionar)
+apps/catalyst/functions/*/index.js
+apps/catalyst/functions/*/index.js.map
+
+# Salida del Catalyst CLI
+.output/
+
+# Binding local del proyecto Catalyst (IDs de proyecto/env): se versiona .catalystrc.example, NO el real
+.catalystrc
+
+# Secretos / entorno (los secretos viven en Catalyst Console → Environment Variables, nunca en repo)
+.env
+.env.*
+!.env.example
+
+# Logs / SO / editores
+*.log
+.DS_Store
+.idea/
+.vscode/*
+!.vscode/extensions.json
