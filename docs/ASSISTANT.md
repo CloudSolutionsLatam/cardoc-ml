@@ -57,9 +57,9 @@ Todo lo demás es config de plataforma (`apps/catalyst/catalyst.json`, `catalyst
   con un token, mapeado a una **Cuenta de Zoho CRM** (módulo Accounts). El `accountId`
   se resuelve **siempre del token**, nunca del payload/query. Es el ancla de la tenancy.
 - **scope**: `opportunities:create` / `reports:read` / `reports:pdf`. Uno por endpoint.
-- **clave de idempotencia vs `payloadFingerprint`**: la clave es el header
-  `X-Idempotency-Key` del consumidor (UNIQUE por Cuenta); el `payloadFingerprint` (hash
-  del payload) detecta "misma clave, payload distinto" → `409`. Ver
+- **clave de idempotencia vs `payloadFingerprint`**: la clave es el `NroSolicitud`
+  del body (UNIQUE por Cuenta, `idempotency_key = String(NroSolicitud)`); el `payloadFingerprint` (hash
+  del payload) detecta "mismo NroSolicitud, payload distinto" → `409`. Ver
   [`../ARQUITECTURA.md`](../ARQUITECTURA.md) §idempotencia.
 - **puerto vs adapter**: el puerto es la interface (en `providers`/`persistence`); el
   adapter es la implementación (Mock para dev, Zoho/DataStore para prod).
@@ -147,8 +147,8 @@ Abrí en orden:
 3. `packages/persistence/src/{entities,repositories}.ts` — `OpportunityRecord` +
    `OpportunitiesRepository.insertIfAbsent`.
 
-Outcomes: `201 created` · `200 duplicate` (misma clave, mismo payload) · `409
-IDEMPOTENCY_CONFLICT` (misma clave, payload distinto) · `202 in_progress`. La unicidad
+Outcomes: `201 created` · `200 duplicate` (mismo NroSolicitud, mismo payload) · `409
+IDEMPOTENCY_CONFLICT` (mismo NroSolicitud, payload distinto) · `202 in_progress`. La unicidad
 física es `UNIQUE(account_id, idempotency_key)` — **se crea a mano en la consola**, ver
 [`playbooks/datastore-esquema.md`](playbooks/datastore-esquema.md).
 

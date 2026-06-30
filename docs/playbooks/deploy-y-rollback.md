@@ -250,17 +250,16 @@ Si health no responde 200, el deploy no levantó — no seguir con el resto.
 
 | Endpoint | Método | Scope | Headers obligatorios | Smoke esperado (modos mock/seed) |
 |----------|--------|-------|----------------------|----------------------------------|
-| `/v1/opportunity-contact` | POST | `opportunities:create` | `X-Api-Key: …`, `X-Idempotency-Key` (**obligatorio**), `Content-Type: application/json` | `200/201` en éxito; mismo key + payload distinto → `409 IDEMPOTENCY_CONFLICT` |
+| `/v1/opportunity-contact` | POST | `opportunities:create` | `X-Api-Key: …`, `Content-Type: application/json` | `200/201` en éxito; mismo `NroSolicitud` + payload distinto → `409 IDEMPOTENCY_CONFLICT` |
 | `/v1/informes` | GET | `reports:read` | `X-Api-Key: …` | `200` con lista |
 | `/v1/informes/:id/pdf` | GET | `reports:pdf` | `X-Api-Key: …` | `200` stream PDF; sin PDF → `404 PDF_NOT_AVAILABLE` |
 
 ```bash
-# POST opportunity-contact (X-Idempotency-Key OBLIGATORIO)
+# POST opportunity-contact (payload AutoCheck; idempotencia por NroSolicitud del body)
 curl -sS -i -X POST "$BASE_URL/v1/opportunity-contact" \
   -H "X-Api-Key: $TOKEN" \
-  -H "X-Idempotency-Key: smoke-$(date +%s)" \
   -H "Content-Type: application/json" \
-  -d '{ "...": "payload mínimo válido — ver CONTRATOS.md" }'
+  -d '{ "NroCedula": 45321890, "NroSolicitud": 908812, "Nombres": "Juan", "Apellidos": "Pérez" }'
 
 # GET informes
 curl -sS -i "$BASE_URL/v1/informes" -H "X-Api-Key: $TOKEN"
@@ -289,7 +288,7 @@ Catálogo de códigos esperables en smoke:
 | `FORBIDDEN_SCOPE` | 403 | token sin el scope (403 **solo** para scope) |
 | `NOT_FOUND` | 404 | recurso inexistente o cross-tenant (cross-tenant = 404, no 403) |
 | `PDF_NOT_AVAILABLE` | 404 | informe sin PDF disponible |
-| `IDEMPOTENCY_CONFLICT` | 409 | misma `X-Idempotency-Key` + payload distinto |
+| `IDEMPOTENCY_CONFLICT` | 409 | mismo `NroSolicitud` + payload distinto |
 | `UNPROCESSABLE` | 422 | semánticamente inválido |
 | `CAP_EXCEEDED` | 429 | superado el cap hora/día/semana |
 | `UPSTREAM_ERROR` | 502 | falla del upstream (CRM/Creator/WorkDrive) |

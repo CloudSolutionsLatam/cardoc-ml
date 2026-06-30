@@ -116,7 +116,7 @@ token resuelto; acceso cruzado → **404** (no 403). Target: alta sin tocar cód
 | 4 | Definir scopes del token | `api_tokens(token_hash, consumer_id, account_id, scopes[JSON], expires_at)` | Scopes según lo que la automotora usará (ver tabla scopes abajo). |
 | 5 | Cargar credenciales CRM/Creator | Catalyst Connection (`ZOHO_CRM_CONNECTOR_NAME=zoho_crm_conn`, OAuth gestionado por Catalyst) + Environment Variables (`ZOHO_CRM_API_DOMAIN`, etc.) | El secreto vive en plataforma, no en repo. Procedimiento detallado: [secretos-y-connections.md](docs/playbooks/secretos-y-connections.md). |
 | 6 | Cap por consumidor (opcional) | `consumer_caps(consumer_id, endpoint, limit_hour, limit_day, limit_week)`; sin fila → defaults de env (`CARDOC_CAP_DEFAULT_*`: 1000/h, 10000/d, 50000/sem) | Cap razonable para el volumen esperado. |
-| 7 | Pruebas funcionales con el token real | `POST /v1/opportunity-contact` (con `X-Idempotency-Key`), `GET /v1/informes`, `GET /v1/informes/:id/pdf` | 2xx donde corresponde; cross-tenant probado → 404; sin scope → 403; idempotencia (repetir misma clave) → mismo resultado. |
+| 7 | Pruebas funcionales con el token real | `POST /v1/opportunity-contact` (payload AutoCheck), `GET /v1/informes`, `GET /v1/informes/:id/pdf` | 2xx donde corresponde; cross-tenant probado → 404; sin scope → 403; idempotencia (repetir mismo `NroSolicitud`) → mismo resultado. |
 | 8 | Verificar trazabilidad | Reconstruir un request de prueba por `correlationId` en `audit_log` | El registro on-finish existe (status + latencia + correlationId). |
 | 9 | Registrar en monitoreo | Umbral de alertas + contacto de escalamiento de la automotora | La automotora aparece en el tablero (ver [§4](#4-monitoreo)). |
 
@@ -174,7 +174,7 @@ Punto de partida de todo diagnóstico: tomar el `correlationId` del request afec
 | `pdf-no-disponible` | `Analisis.pdf_url` vacío y la generación de PDF falla | `PDF_NOT_AVAILABLE` 404 (ver open question §8) |
 | `cap-mal-configurado` | Cap demasiado bajo → automotora legítima bloqueada | `CAP_EXCEEDED` 429 |
 | `token-comprometido` | Sospecha de fuga de un token de automotora | rotación de emergencia (ver [§6](#6-calendario-de-rotaciones)) |
-| `idempotencia-conflicto` | Misma `X-Idempotency-Key` con payload distinto (reuso indebido de clave por el cliente) | `IDEMPOTENCY_CONFLICT` 409 |
+| `idempotencia-conflicto` | Mismo `NroSolicitud` con payload distinto | `IDEMPOTENCY_CONFLICT` 409 |
 | `restore-datastore` | Pérdida/corrupción de datos del DataStore | **mecanismo de backup/export ⚠️ verificar** |
 
 **Sobre de error único** (los 3 endpoints) — todo runbook lo usa para clasificar:

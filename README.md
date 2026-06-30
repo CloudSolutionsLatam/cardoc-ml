@@ -10,7 +10,7 @@ API en **Zoho Catalyst** (Advanced I/O) para automotoras. Tres endpoints `/v1`:
 
 | Endpoint | Scope | Qué hace |
 |----------|-------|----------|
-| `POST /v1/opportunity-contact` | `opportunities:create` | Crea/reutiliza Contacto (dedup por documento) + crea Oportunidad en estado fijo `Agendamiento Ready` en **Zoho CRM** (Deals/Accounts). Idempotente por `X-Idempotency-Key`. |
+| `POST /v1/opportunity-contact` | `opportunities:create` | Crea/reutiliza Contacto (dedup por cédula) + crea Oportunidad `Agendamiento Ready` en **Zoho CRM** (Deals/Accounts). Payload plano de ML; idempotente por `NroSolicitud`. |
 | `GET /v1/informes` | `reports:read` | Lista los Informes de Revisión de la automotora autenticada (filtros controlados + cursor). Fuente: **Zoho Creator**. |
 | `GET /v1/informes/{id}/pdf` | `reports:pdf` | Stream autenticado del PDF, sin URL pública ni ubicación interna. |
 
@@ -63,7 +63,7 @@ Monorepo **pnpm workspaces** + TypeScript, ports & adapters (hexagonal).
   nunca del payload/query. Acceso cruzado → **404** (no 403).
 - **Secretos solo backend**: credenciales en Catalyst Environment Variables; el repo nunca
   los contiene (`.gitignore` + secret-scanning en CI).
-- **Idempotencia** (POST): `UNIQUE(account_id, X-Idempotency-Key)`; misma clave + payload
+- **Idempotencia** (POST): `UNIQUE(account_id, NroSolicitud)`; mismo NroSolicitud + payload
   distinto → `409 IDEMPOTENCY_CONFLICT`.
 - **Cap** configurable hora/día/semana por consumidor+endpoint → `429 CAP_EXCEEDED`.
 - **Auditoría**: middleware on-finish escribe 1 registro por request (status + latencia +

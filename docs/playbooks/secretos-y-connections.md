@@ -133,7 +133,7 @@ Quién hace qué:
 Esto se ve en la firma de cada método del puerto `CrmClient` — la `conn` es un parámetro, no un estado interno del adapter:
 
 ```ts
-findContactByDocument(documento: string, conn: CrmConnection): Promise<{ id: string } | null>;
+findContactByCedula(nroCedula: number, conn: CrmConnection): Promise<{ id: string } | null>;
 createContact(input: ContactInput, conn: CrmConnection): Promise<{ id: string }>;
 createOpportunity(input: CrmCreateOpportunityInput, conn: CrmConnection): Promise<{ id: string }>;
 ```

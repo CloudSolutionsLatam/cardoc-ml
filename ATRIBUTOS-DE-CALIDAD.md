@@ -53,9 +53,9 @@ DataStore), no una verificación de buena fe en código. El use-case siembra un 
 
 | Atributo | Target propuesto | Cómo se verifica |
 |----------|------------------|------------------|
-| Doble creación de Oportunidad | **Cero**. Clave = `X-Idempotency-Key` del consumidor (header **obligatorio** en el POST); unicidad física `UNIQUE(account_id, idempotency_key)`. Replays con la misma clave devuelven el resultado previo (`duplicate`), no crean un segundo Deal | Test de idempotencia en CI: mismo `(accountId, key, payload)` 2×/concurrente ⇒ una sola creación. Ya cubierto en `packages/application/test/create-opportunity-contact.test.ts` (path in-memory) |
-| Misma clave + payload distinto | **409 IDEMPOTENCY_CONFLICT** (semántica Stripe). `payloadFingerprint` (SHA-256 canónico, claves ordenadas) se persiste con la clave; si difiere del fingerprint guardado → conflicto | Test unitario de `payloadFingerprint` (`packages/domain/test/idempotency.test.ts`) + test del use-case que cubre el branch `status: "conflict"` |
-| Dedup de Contacto | **Por Documento (CI/RUT)**: `findContactByDocument` antes de crear; si existe, se reutiliza (`reusedContact: true`) | Test del use-case (rama "contacto existente reutilizado"); contra Mock CRM hoy, contra Zoho CRM en E-02 |
+| Doble creación de Oportunidad | **Cero**. Clave = `NroSolicitud` (del body); unicidad física `UNIQUE(account_id, idempotency_key)` (= `String(NroSolicitud)`). Replays con el mismo NroSolicitud devuelven el resultado previo (`duplicate`), no crean un segundo Deal | Test de idempotencia en CI: mismo `(accountId, NroSolicitud, payload)` 2×/concurrente ⇒ una sola creación. Cubierto en `packages/application/test/create-opportunity-contact.test.ts` (path in-memory) |
+| Mismo NroSolicitud + payload distinto | **409 IDEMPOTENCY_CONFLICT** (semántica Stripe). `payloadFingerprint` (SHA-256 canónico, claves ordenadas) se persiste con la fila; si difiere del fingerprint guardado → conflicto | Test unitario de `payloadFingerprint` (`packages/domain/test/idempotency.test.ts`) + test del use-case que cubre el branch `status: "conflict"` |
+| Dedup de Contacto | **Por cédula (`NroCedula`)**: `findContactByCedula` antes de crear; si existe, se reutiliza (`reusedContact: true`). Requiere campo `Cedula` custom en Contacts | Test del use-case (rama "contacto reutilizado por cédula"); contra Mock CRM hoy, contra Zoho CRM en E-02 |
 | Atomicidad del seed | El row `pending` se inserta con `insertIfAbsent`; si no se creó (otro flujo ganó la carrera), no se ejecuta el efecto externo | Cubierto por el test concurrente. **Depende de** que el DataStore garantice la unicidad real bajo concurrencia → validación de plataforma (§9, ítem 2) |
 | Estado de la Oportunidad | Fijo `Agendamiento Ready`, fijado **server-side** (`FIXED_OPPORTUNITY_STAGE`), nunca elegido por el consumidor | Inspección de código; el valor de picklist exacto del CRM es open question (§9 negocio) |
 
@@ -178,7 +178,7 @@ Cronograma sprint 22/06→03/07/2026 (owner Nestor Toñanez, 1 dev). Ver
 | Etapa | Atributos que entrega |
 |-------|----------------------|
 | **E-01 — Scaffold (completo, deployable)** | Pipeline de middlewares con orden fijo, sobre de error único, tenancy del token, scopes por ruta, idempotencia + `payloadFingerprint`, cap (best-effort in-memory), auditoría on-finish, build/bundle/deploy en verde. Path in-memory + Mock CRM/Reports |
-| **E-02 — Adapters CRM** | `ZohoCrmClient` real (Connection OAuth), dedup por documento contra Zoho, creación de Deal `Agendamiento Ready`; medición de latencia end-to-end real |
+| **E-02 — Adapters CRM** | `ZohoCrmClient` real (self-client OAuth), dedup por cédula contra Zoho, creación de Deal `Agendamiento Ready`; medición de latencia end-to-end real |
 | **E-03 — Adapters Creator/WorkDrive + PDF** | `ZohoCreatorReportsSource` real, streaming del PDF, generación perezosa + write-back; cierre de las open questions de PDF |
 | **Pre-producción** | Las validaciones de plataforma (§9): Cache atómico para cap duro, streaming/payload, residencia, SLA/quotas, retención, backup/export del DataStore |
 

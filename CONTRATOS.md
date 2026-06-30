@@ -37,7 +37,6 @@ Documentos relacionados: [README](README.md) · [ARQUITECTURA](ARQUITECTURA.md) 
 | Header | Dirección | Obligatorio | Semántica |
 |---|---|---|---|
 | `X-Api-Key: <token>` | request | Sí (excepto `/v1/health`) | Token opaco. Se compara solo por **hash** (`hashToken`, `auth.ts`); el token plano nunca se persiste ni se loguea. |
-| `X-Idempotency-Key` | request | **Solo** en `POST /v1/opportunity-contact` | Clave de idempotencia del consumidor. Ver §6. |
 | `X-Correlation-Id` | request (opcional) / response (siempre) | No | Si llega y es UUID válido se propaga; si no, se regenera (`correlationMiddleware`). Siempre vuelve en la respuesta y aparece en el sobre de error y en `audit_log`. |
 | `X-Cap-Window` / `X-Cap-Limit` / `X-Cap-Remaining` | response | — | Estado del cap más ajustado de las 3 ventanas (`cap.ts`). Ver §7. |
 | `Retry-After` | response (solo 429) | — | Segundos hasta el reset de la ventana excedida (`cap.ts`). |
@@ -82,14 +81,15 @@ Scopes existentes (`packages/domain/src/types.ts`): `opportunities:create`, `rep
 
 ## 2. `POST /v1/opportunity-contact`
 
-Crea o reutiliza un Contacto (dedup por **Documento** CI/RUT) y crea una Oportunidad con
-estado fijo `Agendamiento Ready`. Idempotente por `X-Idempotency-Key`.
+Crea o reutiliza un Contacto (dedup por **cédula**, `NroCedula`) y crea una Oportunidad con
+estado fijo `Agendamiento Ready`. Idempotente por `NroSolicitud` (del body). Es el payload
+que manda **ML/AutoCheck**.
 
 | | |
 |---|---|
 | **Método / path** | `POST /v1/opportunity-contact` |
 | **Scope requerido** | `opportunities:create` |
-| **Headers** | `X-Api-Key: …` (oblig.) · `X-Idempotency-Key` (**oblig.**) · `X-Correlation-Id` (opc.) |
+| **Headers** | `X-Api-Key: …` (oblig.) · `Content-Type: application/json` · `X-Correlation-Id` (opc.) |
 | **Cap (endpoint lógico)** | `opportunity-contact` |
 | **Handler** | `routes/opportunity-contact.ts` · use-case `createOpportunityContact` |
 
@@ -100,26 +100,30 @@ nivel raíz hace fallar la validación → `400 VALIDATION_ERROR`.
 
 ```jsonc
 {
-  "contact": {
-    "documento": "1.234.567-8",   // string, requerido — LLAVE de dedup (CI/RUT)
-    "nombre":    "Juan Pérez",     // string, requerido
-    "email":     "juan@mail.com",  // string email, opcional
-    "telefono":  "+59899123456",   // string, opcional
-    "pais":      "UY"              // enum: "UY" | "AR" | "US", opcional
-  },
-  "opportunity": {
-    "nombre": "Agendamiento Amarok 2018",  // string, requerido
-    "meta":   { "matricula": "ABC1234" }   // objeto libre, opcional → campos del Deal
-  }
+  "NroCedula":            45321890,                // long, requerido — LLAVE de dedup del Contacto
+  "NroSolicitud":         908812,                  // long, requerido, único — External ID + idempotencia
+  "Nombres":              "Juan Carlos",           // string ≤100, requerido
+  "Apellidos":            "Pérez Rodríguez",       // string ≤100, requerido
+  "CelularCliente":       "099123456",             // string ≤30, opcional
+  "Tenant":               "Empresa_Alfa",          // string ≤100, opcional — informativo (la Cuenta es "ML")
+  "Sucursal":             "Centro Montevideo",     // string ≤100, opcional
+  "DepartamentoSucursal": "Montevideo",            // string ≤100, opcional
+  "CiudadSucursal":       "Montevideo",            // string ≤100, opcional
+  "DireccionSucursal":    "Av. 18 de Julio 1234",  // string ≤200, opcional
+  "MarcaVehiculo":        "Chevrolet",             // string ≤100, opcional
+  "ModeloVehiculo":       "Onix",                  // string ≤100, opcional
+  "AnioVehiculo":         2022,                    // int, opcional
+  "MatriculaVehiculo":    "SBA1234"                // string ≤30, opcional
 }
 ```
 
 Reglas de validación derivadas del schema/dominio:
 
-- `contact.documento` es **requerido** porque es la llave de deduplicación del Contacto (AC-01).
-- `opportunity.stage` **no se acepta** en el body: el estado se fija server-side a
-  `FIXED_OPPORTUNITY_STAGE = "Agendamiento Ready"` (`types.ts`).
-- `pais` solo admite `UY` / `AR` / `US` (`countrySchema`).
+- `NroCedula`, `NroSolicitud`, `Nombres` y `Apellidos` son **requeridos**; el resto opcional.
+- `NroCedula` es la **llave de deduplicación** del Contacto (ML no manda email).
+- `NroSolicitud` (único) es la **clave de idempotencia** y el **External ID** de la Oportunidad.
+- El estado **no se acepta** en el body: se fija server-side a `FIXED_OPPORTUNITY_STAGE = "Agendamiento Ready"`.
+- `.strict()`: una clave de nivel raíz fuera de la lista hace fallar la validación → `400`.
 
 ### 2.2 Responses de éxito
 
@@ -132,21 +136,21 @@ El handler traduce el `outcome` del use-case a HTTP. La semántica de idempotenc
 {
   "status": "created",
   "correlationId": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
-  "idempotencyKey": "order-2026-06-25-0001",
+  "nroSolicitud": 908812,
   "contact":     { "id": "ct_001", "reused": false },
   "opportunity": { "id": "op_001", "stage": "Agendamiento Ready" }
 }
 ```
 
-`contact.reused = true` cuando el Contacto ya existía y se reutilizó por Documento.
+`contact.reused = true` cuando el Contacto ya existía y se reutilizó por cédula (`NroCedula`).
 
-**`200 OK`** — replay exacto (misma clave + mismo payload, ya creado; `status: "duplicate"`):
+**`200 OK`** — replay exacto (mismo `NroSolicitud` + mismo payload, ya creado; `status: "duplicate"`):
 
 ```json
 {
   "status": "duplicate",
   "correlationId": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
-  "idempotencyKey": "order-2026-06-25-0001",
+  "nroSolicitud": 908812,
   "contact":     { "id": "ct_001" },
   "opportunity": { "id": "op_001", "stage": "Agendamiento Ready" }
 }
@@ -158,7 +162,7 @@ El handler traduce el `outcome` del use-case a HTTP. La semántica de idempotenc
 {
   "status": "in_progress",
   "correlationId": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
-  "idempotencyKey": "order-2026-06-25-0001"
+  "nroSolicitud": 908812
 }
 ```
 
@@ -166,10 +170,10 @@ El handler traduce el `outcome` del use-case a HTTP. La semántica de idempotenc
 
 | HTTP | code | Cuándo |
 |---|---|---|
-| 400 | `VALIDATION_ERROR` | Falta `X-Idempotency-Key` (`details.header`) **o** body inválido / clave extra (`details.fields`). |
+| 400 | `VALIDATION_ERROR` | Body inválido / falta un campo requerido / clave extra (`details.fields`). |
 | 401 | `UNAUTHENTICATED` | Sin X-Api-Key o token inválido/revocado/vencido. |
 | 403 | `FORBIDDEN_SCOPE` | El token no tiene `opportunities:create` (`details.required`). |
-| 409 | `IDEMPOTENCY_CONFLICT` | Misma `X-Idempotency-Key` con payload distinto (`details.idempotencyKey`). Ver §6. |
+| 409 | `IDEMPOTENCY_CONFLICT` | Mismo `NroSolicitud` con payload distinto (`details.nroSolicitud`). Ver §8. |
 | 429 | `CAP_EXCEEDED` | Cap del endpoint excedido. `Retry-After` + `details.{window,limit,retryAfterSeconds}`. |
 | 502 | `UPSTREAM_ERROR` | Falla creando en CRM (`details.upstream = "crm"`). El row queda en `status=error`. |
 | 500 | `INTERNAL_ERROR` | Container/cuenta no resueltos u otro fallo no clasificado. |
@@ -177,19 +181,19 @@ El handler traduce el `outcome` del use-case a HTTP. La semántica de idempotenc
 ### 2.4 curl (token de dev)
 
 ```bash
-curl -i -X POST http://localhost:3000/v1/opportunity-contact \
+curl -i -X POST http://localhost:3030/v1/opportunity-contact \
   -H "X-Api-Key: test-token" \
-  -H "X-Idempotency-Key: order-2026-06-25-0001" \
   -H "X-Correlation-Id: f47ac10b-58cc-4372-a567-0e02b2c3d479" \
   -H "Content-Type: application/json" \
   -d '{
-    "contact":     { "documento": "1.234.567-8", "nombre": "Juan Pérez", "pais": "UY" },
-    "opportunity": { "nombre": "Agendamiento Amarok 2018", "meta": { "matricula": "ABC1234" } }
+    "NroCedula": 45321890, "NroSolicitud": 908812,
+    "Nombres": "Juan Carlos", "Apellidos": "Pérez Rodríguez", "CelularCliente": "099123456",
+    "MarcaVehiculo": "Chevrolet", "ModeloVehiculo": "Onix", "AnioVehiculo": 2022, "MatriculaVehiculo": "SBA1234"
   }'
 ```
 
-Reintento exacto (misma clave + mismo body) → `200` con `status: "duplicate"`.
-Misma clave con body distinto → `409 IDEMPOTENCY_CONFLICT`.
+Reintento exacto (mismo `NroSolicitud` + mismo body) → `200` con `status: "duplicate"`.
+Mismo `NroSolicitud` con body distinto → `409 IDEMPOTENCY_CONFLICT`.
 
 ---
 
@@ -380,7 +384,7 @@ filtrar detalle interno, PII ni URLs/fileId del upstream:
     "code": "VALIDATION_ERROR",
     "message": "payload inválido",
     "correlationId": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
-    "details": { "fields": { "contact": ["documento (CI/RUT) requerido ..."] } }
+    "details": { "fields": { "NroSolicitud": ["Required"], "Nombres": ["Required"] } }
   }
 }
 ```
@@ -401,12 +405,12 @@ registre; y loguea **solo** `correlationId + método + path + code` (nunca paylo
 
 | HTTP | code | Cuándo / origen |
 |---|---|---|
-| 400 | `VALIDATION_ERROR` | Falta `X-Idempotency-Key` o body inválido en POST (`opportunity-contact.ts`, `ApiError(400,…)`). `details`: `header` o `fields`. |
+| 400 | `VALIDATION_ERROR` | Body inválido / campo requerido faltante / clave extra en POST (`opportunity-contact.ts`). `details.fields`. |
 | 401 | `UNAUTHENTICATED` | Sin X-Api-Key / token inválido/revocado/vencido (`auth.ts`). |
 | 403 | `FORBIDDEN_SCOPE` | Token sin el scope requerido (`requireScope`, `auth.ts`). `details.required`. **Único** caso de 403. |
 | 404 | `NOT_FOUND` | Recurso inexistente o **de otra Cuenta** (`ReportNotFoundError` → `errors.ts`). Cross-tenant = 404 por decisión (§9). |
 | 404 | `PDF_NOT_AVAILABLE` | Informe existe pero sin PDF disponible/generable (`PdfNotAvailableError`). `details.informeId`. |
-| 409 | `IDEMPOTENCY_CONFLICT` | Misma `X-Idempotency-Key`, payload distinto (POST). `details.idempotencyKey`. |
+| 409 | `IDEMPOTENCY_CONFLICT` | Mismo `NroSolicitud`, payload distinto (POST). `details.nroSolicitud`. |
 | 422 | `UNPROCESSABLE` | Query de `GET /v1/informes` fuera de la allowlist o tipo inválido (`.strict()`). `details.fields`. |
 | 429 | `CAP_EXCEEDED` | Cap de endpoint excedido (`cap.ts`). `details.{window,limit,retryAfterSeconds}` + headers `Retry-After`/`X-Cap-*`. |
 | 502 | `UPSTREAM_ERROR` | Falla de CRM/Creator/WorkDrive (`UpstreamError` o POST fallido). `details.upstream` = etiqueta **opaca** (`crm`\|`creator`\|`workdrive`). |
@@ -427,8 +431,8 @@ registre; y loguea **solo** `correlationId + método + path + code` (nunca paylo
 ```json
 // 409
 { "error": { "code": "IDEMPOTENCY_CONFLICT",
-  "message": "la misma X-Idempotency-Key se usó con un payload distinto",
-  "correlationId": "…", "details": { "idempotencyKey": "order-2026-06-25-0001" } } }
+  "message": "el mismo NroSolicitud llegó con un payload distinto",
+  "correlationId": "…", "details": { "nroSolicitud": 908812 } } }
 ```
 ```json
 // 429
@@ -475,17 +479,17 @@ con `details.{window, limit, retryAfterSeconds}`.
 
 ## 8. Semántica de idempotencia (`POST /v1/opportunity-contact`)
 
-Decisión confirmada (Nestor, 2026-06-25, `idempotency.ts`): la **clave es el header
-`X-Idempotency-Key`** del consumidor. Unicidad física: `UNIQUE(account_id, idempotency_key)` en
-`crm_opportunities`. Se persiste también `payload_fingerprint` (SHA-256 canónico del body,
-`payloadFingerprint`) para detectar “misma clave, payload distinto” (estilo Stripe).
+La **clave de idempotencia es `NroSolicitud`** (del body; único en ML). Unicidad física:
+`UNIQUE(account_id, idempotency_key)` en `crm_opportunities`, con `idempotency_key = String(NroSolicitud)`.
+Se persiste también `payload_fingerprint` (SHA-256 canónico del body, `payloadFingerprint`)
+para detectar “mismo NroSolicitud, payload distinto” (estilo Stripe). **No hay header de idempotencia.**
 
 ### 8.1 Flujo (`create-opportunity-contact.ts`)
 
 1. Se calcula `fingerprint` del payload y se **siembra** un row `pending` con
    `insertIfAbsent(seed)` (clave `accountId + idempotencyKey`), **antes** de tocar CRM.
-2. **Si se creó el row** (somos el creador) → efecto externo: `findContactByDocument` (dedup por
-   Documento) → `createContact` si no existía → `createOpportunity` (stage fijo) → `markCreated`.
+2. **Si se creó el row** (somos el creador) → efecto externo: `findContactByCedula` (dedup por
+   cédula) → `createContact` si no existía → `createOpportunity` (stage fijo) → `markCreated`.
    Resultado **`201` `created`**. Si CRM falla → `markError` y **`502` `UPSTREAM_ERROR`**.
 3. **Si NO se creó** (la clave ya existía), según el row encontrado:
 
@@ -497,15 +501,15 @@ Decisión confirmada (Nestor, 2026-06-25, `idempotency.ts`): la **clave es el he
 | `status = error` (intento previo falló) | `error` | **502 `UPSTREAM_ERROR`** |
 
 > Resumen de status HTTP de idempotencia: **201** (creado) · **200** (replay exacto) · **202**
-> (en curso) · **409** (misma clave, payload distinto) · **502** (intento previo en error /
+> (en curso) · **409** (mismo NroSolicitud, payload distinto) · **502** (intento previo en error /
 > fallo de CRM en este intento). Los 201/200/409 son los casos rectores; el 202 y el 502-por-error
 > previo son los estados intermedios reales del use-case.
 
 ### 8.2 Garantía
 
 La Oportunidad **no se duplica**: solo el creador del row ejecuta el efecto externo; los demás
-reintentos con la misma clave hacen replay/short-circuit. La dedup del Contacto es por **Documento**
-(CI/RUT) dentro del propio efecto.
+reintentos con el mismo `NroSolicitud` hacen replay/short-circuit. La dedup del Contacto es por
+**cédula** (`NroCedula`) dentro del propio efecto.
 
 ---
 

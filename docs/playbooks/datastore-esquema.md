@@ -81,8 +81,8 @@ Red física anti-duplicación del POST. El **UNIQUE compuesto es el corazón** d
 | Columna | Campo dominio | Tipo lógico | Índice / único | Notas |
 |---|---|---|---|---|
 | `account_id` | `accountId` | string | parte de **`UNIQUE(account_id, idempotency_key)`** | Del token, nunca del payload |
-| `idempotency_key` | `idempotencyKey` | string | parte de **`UNIQUE(account_id, idempotency_key)`** | = `X-Idempotency-Key` del consumidor |
-| `payload_fingerprint` | `payloadFingerprint` | string (hash) | — | `domain.idempotency.payloadFingerprint`; detecta misma-clave/payload-distinto → 409 |
+| `idempotency_key` | `idempotencyKey` | string | parte de **`UNIQUE(account_id, idempotency_key)`** | = `String(NroSolicitud)` (del body de ML) |
+| `payload_fingerprint` | `payloadFingerprint` | string (hash) | — | `domain.idempotency.payloadFingerprint`; detecta mismo-NroSolicitud/payload-distinto → 409 |
 | `contact_id` | `contactId` | string \| null | — | ID del Contacto CRM (se llena en `markCreated`) |
 | `opportunity_id` | `opportunityId` | string \| null | — | ID del Deal CRM (se llena en `markCreated`) |
 | `status` | `status` | enum `pending` \| `created` \| `error` | — | Texto; máquina de estados del intento |
@@ -187,7 +187,7 @@ Para levantar el DataStore de un entorno limpio (nuevo proyecto Catalyst). Mecá
 - [ ] **Sembrar `consumers` + `api_tokens`** del primer consumidor real (en dev hay un token sembrado en memoria: `X-Api-Key: test-token`, Cuenta `acc_dev`, todos los scopes — vía `seed()` del fake, **no** toca el DataStore).
 - [ ] **`consumer_caps`** opcional: si no hay fila, el middleware cae a `CARDOC_CAP_DEFAULT_HOUR/DAY/WEEK`. Crear filas solo para overrides por consumidor.
 - [ ] **Variable de entorno** `CARDOC_PERSISTENCE=datastore` en el entorno con DataStore (vs `memory` para local/tests). Ver [secretos-y-connections.md](secretos-y-connections.md).
-- [ ] **Smoke de verificación del UNIQUE:** disparar dos veces el POST con el mismo `X-Idempotency-Key` y verificar que el segundo devuelve `created: false` / 409 — **no** una segunda fila. Es la única prueba real de que el constraint existe.
+- [ ] **Smoke de verificación del UNIQUE:** disparar dos veces el POST con el mismo `NroSolicitud` y verificar que el segundo devuelve `created: false` / 409 — **no** una segunda fila. Es la única prueba real de que el constraint existe.
 - [ ] **Backup/export del DataStore** y **retención de `audit_log`** definidos antes de producción → ⚠️ verificar (de-risk en [OPERACIONES.md](../../OPERACIONES.md)).
 
 ---

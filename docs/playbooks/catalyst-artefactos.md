@@ -85,7 +85,7 @@ Las columnas de negocio van en **snake_case** en DataStore y se mapean a camelCa
 
 ### Constraint UNIQUE — se crea en la consola, no en código
 
-La idempotencia se apoya en `UNIQUE(account_id, idempotency_key)` sobre `crm_opportunities`. **Este constraint NO se declara en el repo**: se crea **en la consola de Catalyst** (así está documentado en el comentario de cabecera de `catalyst.ts`). El código asume que existe: `insertIfAbsent` intenta el insert y, si el UNIQUE rechaza el segundo concurrente, cae al `catch`, busca el existente y devuelve `created: false`. Esa es la red **física** anti-duplicación (estilo Stripe: misma clave + payload distinto → 409 `IDEMPOTENCY_CONFLICT`, lógica de fingerprint en el use-case).
+La idempotencia se apoya en `UNIQUE(account_id, idempotency_key)` sobre `crm_opportunities`. **Este constraint NO se declara en el repo**: se crea **en la consola de Catalyst** (así está documentado en el comentario de cabecera de `catalyst.ts`). El código asume que existe: `insertIfAbsent` intenta el insert y, si el UNIQUE rechaza el segundo concurrente, cae al `catch`, busca el existente y devuelve `created: false`. Esa es la red **física** anti-duplicación (estilo Stripe: mismo `NroSolicitud` + payload distinto → 409 `IDEMPOTENCY_CONFLICT`, lógica de fingerprint en el use-case).
 
 > Acción operativa: el constraint UNIQUE en `crm_opportunities` es un paso **manual de provisioning en consola** que debe quedar en el checklist de deploy de cada environment. Ver [`./datastore-esquema.md`](./datastore-esquema.md) y [`./deploy-y-rollback.md`](./deploy-y-rollback.md).
 

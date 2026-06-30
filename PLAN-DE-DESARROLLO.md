@@ -58,7 +58,7 @@ demuestra (no a una afirmación).
 | **AC-05** | Autenticación X-Api-Key: solo se persiste el `sha256` del token; token plano nunca se loguea ni guarda; vigencia (expiración/revocación) chequeada | ✅ E-01 (in-memory); 🟡 E-02 (DataStore real) | `middleware/auth.ts` (`authMiddleware`, `hashToken`), `packages/domain/src/tokens.ts`, `packages/persistence/src/entities.ts` |
 | **AC-06** | Tenancy: `accountId` resuelto SIEMPRE del token, nunca del payload/query | ✅ E-01 | `middleware/auth.ts` (setea `req.accountId` del token), use-cases reciben `accountId` del `ctx`, no del body |
 | **AC-07** | Cap configurable hora/día/semana por consumidor+endpoint → 429 `CAP_EXCEEDED` con `Retry-After` | 🟡 E-01 (in-memory por contenedor); ⬜ E-04 (distribuido en Cache) | `middleware/cap.ts` (3 ventanas, headers `X-Cap-*`, `Retry-After`) |
-| **AC-08** | Idempotencia POST: `UNIQUE(account_id, idempotency_key)` + `payloadFingerprint`; misma clave+payload distinto → 409; idempotencia por tenant | ✅ E-01 (lógica + tests); 🟡 E-02 (UNIQUE físico en DataStore) | `packages/application/src/create-opportunity-contact.ts`, `packages/domain/src/idempotency.ts`, `packages/persistence/src/catalyst.ts` (`insertIfAbsent`), test `create-opportunity-contact.test.ts` (4 casos) |
+| **AC-08** | Idempotencia POST: `UNIQUE(account_id, idempotency_key)` (= `String(NroSolicitud)`) + `payloadFingerprint`; mismo NroSolicitud + payload distinto → 409; idempotencia por tenant | ✅ E-01 (lógica + tests); 🟡 E-02 (UNIQUE físico en DataStore) | `packages/application/src/create-opportunity-contact.ts`, `packages/domain/src/idempotency.ts`, `packages/persistence/src/catalyst.ts` (`insertIfAbsent`), test `create-opportunity-contact.test.ts` (5 casos) |
 | **AC-09** | Auditoría append-only: middleware on-finish, 1 registro por request en los 3 endpoints; sin PII/payload/bytes de PDF | ✅ E-01 | `middleware/audit.ts` (`auditOnFinish`), `entities.ts` (`AuditLogEntry`), `catalyst.ts` (`append`, sin update/delete) |
 | **AC-10** | Cross-tenant: acceso a recurso de otra Cuenta → 404 (no 403); 403 reservado a scope insuficiente | 🟡 E-01 (forma); ✅ al entrar adapter real | `routes/informes.ts` (`openPdf` valida tenancy → 404), `middleware/auth.ts` (`requireScope` → 403 solo por scope) |
 
@@ -127,14 +127,14 @@ rechazo del UNIQUE), y el contrato de la `CrmConnection`.
 
 | Tarea | Salida | Bloqueo |
 |-------|--------|---------|
-| Implementar `findContactByDocument` / `createContact` / `createOpportunity` contra Zoho CRM REST | Stubs `NotImplemented` → HTTP real | **CRM-Q1, CRM-Q2** (API names + picklist) |
+| Implementar `findContactByCedula` / `createContact` / `createOpportunity` contra Zoho CRM REST | Stubs `NotImplemented` → HTTP real | **CRM-Q1, CRM-Q2** (API names + picklist) |
 | Resolver la Catalyst Connection OAuth en runtime (hoy `resolveCrmConnection` devuelve stub) | `accessToken` real desde la Connection gestionada | **CAT-Q5** (setup Connection) |
 | Activar `CARDOC_PERSISTENCE=datastore`: crear tablas y el `UNIQUE(account_id, idempotency_key)` en consola | Idempotencia con red física, no solo lógica | **CAT-Q2** (atomicidad) — el UNIQUE del DataStore es el ancla; ⚠️ verificar (docs oficiales/consola) que el `insertRow` rechaza el segundo concurrente |
 | Sembrar `consumers` + `api_tokens` reales (hash del token, scopes, Cuenta) | 1 automotora = 1 Cuenta CRM = 1 token | — |
 
 **Definición de hecho (M1)**: con `CARDOC_CRM_MODE=zoho` y `CARDOC_PERSISTENCE=datastore`, un POST
-real crea Contacto (dedup por Documento CI/RUT) + Oportunidad en estado `Agendamiento Ready`
-(fijado server-side, módulo Deals); reintento con misma clave → `duplicate`; clave repetida con
+real crea Contacto (dedup por cédula `NroCedula`) + Oportunidad en estado `Agendamiento Ready`
+(fijado server-side, módulo Deals); reintento con mismo `NroSolicitud` → `duplicate`; mismo número con
 payload distinto → 409.
 
 ---

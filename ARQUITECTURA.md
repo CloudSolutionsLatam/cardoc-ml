@@ -30,7 +30,7 @@ nunca habla con Zoho directo ni ve una URL, fileId o ruta interna.
 
 | Endpoint | Scope | Qué hace | Upstream |
 |----------|-------|----------|----------|
-| `POST /v1/opportunity-contact` | `opportunities:create` | Crea/reutiliza Contacto (dedup por documento) + crea Oportunidad en estado fijo `Agendamiento Ready`. Idempotente por `X-Idempotency-Key` (obligatorio). | Zoho CRM (Contacts/Deals/Accounts) |
+| `POST /v1/opportunity-contact` | `opportunities:create` | Crea/reutiliza Contacto (dedup por cédula `NroCedula`) + crea Oportunidad en estado fijo `Agendamiento Ready`. Payload plano de ML; idempotente por `NroSolicitud` (del body). | Zoho CRM (Contacts/Deals/Accounts) |
 | `GET /v1/informes` | `reports:read` | Lista los Informes de Revisión de la automotora autenticada (filtros controlados + cursor opaco). | Zoho Creator |
 | `GET /v1/informes/:id/pdf` | `reports:pdf` | Stream autenticado del PDF, sin URL pública ni ubicación interna. | Zoho Creator + WorkDrive |
 | `GET /v1/health` | — (abierto) | Health check para monitoreo de disponibilidad. | — |
@@ -58,7 +58,7 @@ una superficie de integración delgada, auditable y desacoplable.
 │ la automotora    │      │  (Express, Node 24, CommonJS)        │─────▶│  Contacts        │
 │                  │─────▶│                                      │◀─────│  Deals           │
 │ X-Api-Key: <token>   │      │  pipeline de middlewares (§4):       │      │  Accounts        │
-│ X-Idempotency-Key│◀─────│   json → correlation → audit →       │      ├──────────────────┤
+│ (body AutoCheck) │◀─────│   json → correlation → audit →       │      ├──────────────────┤
 │ X-Correlation-Id │      │   attachContainer → auth → scope →   │─────▶│ Zoho Creator     │
 └──────────────────┘      │   cap → handler ; errors (último)    │◀─────│  app Informes    │
                           │                                      │      │  form `Analisis` │
@@ -183,12 +183,12 @@ Todos los endpoints responden el error con la misma forma (`middleware/errors.ts
 
 | Código | HTTP | Cuándo |
 |--------|------|--------|
-| `VALIDATION_ERROR` | 400 | Falta `X-Idempotency-Key`; payload del POST no pasa el schema. |
+| `VALIDATION_ERROR` | 400 | El payload del POST no pasa el schema (campo requerido faltante / clave extra). |
 | `UNAUTHENTICATED` | 401 | Falta el X-Api-Key, o token inválido/expirado/revocado. |
 | `FORBIDDEN_SCOPE` | 403 | Token sin el scope del endpoint. **Único** uso de 403. |
 | `NOT_FOUND` | 404 | Informe inexistente **o de otra Cuenta** (cross-tenant → 404, no 403). |
 | `PDF_NOT_AVAILABLE` | 404 | El informe existe pero su PDF no está disponible ni se pudo generar. |
-| `IDEMPOTENCY_CONFLICT` | 409 | Misma `X-Idempotency-Key` con payload distinto (estilo Stripe). |
+| `IDEMPOTENCY_CONFLICT` | 409 | Mismo `NroSolicitud` con payload distinto (estilo Stripe). |
 | `UNPROCESSABLE` | 422 | Query de `GET /v1/informes` con un parámetro fuera de la allowlist (`.strict()`). |
 | `CAP_EXCEEDED` | 429 | Cuota hora/día/semana superada (con `Retry-After`). |
 | `UPSTREAM_ERROR` | 502 | Falla del upstream — etiqueta opaca (`crm`/`creator`/`workdrive`), nunca URL interna. |
@@ -334,8 +334,8 @@ Confirmadas por Nestor Toñanez, 2026-06-25.
 | # | Decisión | Alternativa descartada | Rationale |
 |---|----------|------------------------|-----------|
 | 1 | **Catalyst como gateway de control** delante de Zoho; el DataStore guarda control (tokens, idempotencia, auditoría, caps), no negocio | CRM/Creator como única capa, sin gateway | Zoho no provee auth scoped por consumidor, idempotencia, cap ni auditoría uniforme; el gateway las centraliza y deja a Zoho como sistema de registro. |
-| 2 | **Idempotencia = `X-Idempotency-Key` del consumidor** como clave, `UNIQUE(account_id, idempotency_key)` + `payload_fingerprint` para misma-clave-payload-distinto → 409 (estilo Stripe) | Clave derivada server-side del payload | El consumidor controla el reintento; el `UNIQUE` es la red física anti-doble-Oportunidad y el fingerprint detecta el mal uso de la clave. |
-| 3 | **Dedup de Contacto por Documento (CI/RUT)** | Dedup por email/teléfono | El documento es la identidad estable de la persona; email/teléfono cambian y se comparten. Por eso `documento` es requerido en el schema. |
+| 2 | **Idempotencia = `NroSolicitud` (del body)**, `UNIQUE(account_id, idempotency_key)` con `idempotency_key = String(NroSolicitud)` + `payload_fingerprint` → 409 (estilo Stripe) | header `X-Idempotency-Key` del consumidor | ML manda `NroSolicitud` único; el `UNIQUE` es la red física anti-doble-Oportunidad y el fingerprint detecta payload distinto con el mismo número. |
+| 3 | **Dedup de Contacto por `NroCedula`** (campo `Cedula` custom en Contacts) | email (ML no lo manda) / teléfono | ML manda `NroCedula` y no email; la cédula es la identidad estable. Por eso `NroCedula` es requerido en el schema. |
 | 4 | **Auth a Zoho CRM = Catalyst Connection** (OAuth gestionado) | Token estático en env / OAuth a mano | Catalyst gestiona refresh y rotación; el adapter recibe el `accessToken` resuelto y nunca toca secretos. |
 | 5 | **Cross-tenant → 404** (no 403) | 403 para acceso cruzado | 403 confirmaría la existencia del recurso ajeno. 404 no filtra; 403 queda reservado a falta de scope. |
 | 6 | **`accountId` siempre del token** | Aceptar `accountId` del payload/query | Es la base de la tenancy: el consumidor no puede elegir Cuenta. Reforzado con `.strict()` en la query. |
