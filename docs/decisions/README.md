@@ -51,14 +51,14 @@ Convención: si una ADR crece o necesita discusión extensa, se separa a su prop
 reintento no crea dos Oportunidades.
 - **Estado:** Aceptada — **implementado** (revisa la idea previa del header `X-Idempotency-Key`).
 - **Contexto:** ML manda la solicitud AutoCheck con su `NroSolicitud` (único en su sistema, confirmado por mail); es el ancla de no-duplicación. No hay header de idempotencia.
-- **Consecuencia:** `idempotencyKey = String(NroSolicitud)`; el `payload_fingerprint` detecta "mismo NroSolicitud, payload distinto" → 409. Se persiste como **External ID** del Deal (campo a crear en CRM). Ver `packages/application/src/create-opportunity-contact.ts`.
+- **Consecuencia:** `idempotencyKey = String(NroSolicitud)`; el `payload_fingerprint` detecta "mismo NroSolicitud, payload distinto" → 409. Se persiste en el campo **External ID** del Deal (API `EXTERNAL_ID`, creado en CRM — Nestor 2026-06-30). Ver `packages/application/src/create-opportunity-contact.ts`.
 - **Descartado:** header `X-Idempotency-Key` (ML ancla en `NroSolicitud`, que viaja en el body).
 
 ## ADR-0003
 **Dedup de Contacto por `NroCedula`.**
 - **Estado:** Aceptada — **implementado** (revisa "Email" y "Documento", ambos descartados).
 - **Contexto:** el payload de ML trae `NroCedula` pero **no trae email** (confirmado por mail); y el módulo `Contacts` no tiene campo documento. La cédula es la identidad estable que sí llega.
-- **Consecuencia:** `findContactByCedula` antes de crear; si existe, se reutiliza. Requiere un **campo custom `Cedula`** en Contacts (tarea CRM). Ver `packages/providers/src/crm-client.ts`.
+- **Consecuencia:** `findContactByCedula` antes de crear; si existe, se reutiliza. Usa el **campo custom `Cedula`** en Contacts (creado en CRM — Nestor 2026-06-30). Ver `packages/providers/src/crm-client.ts`.
 - **Descartado:** email (ML no lo manda) / teléfono.
 
 ## ADR-0004

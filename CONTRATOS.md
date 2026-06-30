@@ -82,7 +82,7 @@ Scopes existentes (`packages/domain/src/types.ts`): `opportunities:create`, `rep
 ## 2. `POST /v1/opportunity-contact`
 
 Crea o reutiliza un Contacto (dedup por **cédula**, `NroCedula`) y crea una Oportunidad con
-estado fijo `Agendamiento Ready`. Idempotente por `NroSolicitud` (del body). Es el payload
+estado fijo `Nueva Solicitud`. Idempotente por `NroSolicitud` (del body). Es el payload
 que manda **ML/AutoCheck**.
 
 | | |
@@ -122,7 +122,7 @@ Reglas de validación derivadas del schema/dominio:
 - `NroCedula`, `NroSolicitud`, `Nombres` y `Apellidos` son **requeridos**; el resto opcional.
 - `NroCedula` es la **llave de deduplicación** del Contacto (ML no manda email).
 - `NroSolicitud` (único) es la **clave de idempotencia** y el **External ID** de la Oportunidad.
-- El estado **no se acepta** en el body: se fija server-side a `FIXED_OPPORTUNITY_STAGE = "Agendamiento Ready"`.
+- El estado **no se acepta** en el body: se fija server-side a `FIXED_OPPORTUNITY_STAGE = "Nueva Solicitud"`.
 - `.strict()`: una clave de nivel raíz fuera de la lista hace fallar la validación → `400`.
 
 ### 2.2 Responses de éxito
@@ -138,7 +138,7 @@ El handler traduce el `outcome` del use-case a HTTP. La semántica de idempotenc
   "correlationId": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
   "nroSolicitud": 908812,
   "contact":     { "id": "ct_001", "reused": false },
-  "opportunity": { "id": "op_001", "stage": "Agendamiento Ready" }
+  "opportunity": { "id": "op_001", "stage": "Nueva Solicitud" }
 }
 ```
 
@@ -152,7 +152,7 @@ El handler traduce el `outcome` del use-case a HTTP. La semántica de idempotenc
   "correlationId": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
   "nroSolicitud": 908812,
   "contact":     { "id": "ct_001" },
-  "opportunity": { "id": "op_001", "stage": "Agendamiento Ready" }
+  "opportunity": { "id": "op_001", "stage": "Nueva Solicitud" }
 }
 ```
 
@@ -530,8 +530,8 @@ Estos puntos están abiertos; los campos PLACEHOLDER del contrato dependen de el
 - **Negocio / PDF.** Cómo se genera el PDF cuando `Analisis.pdf_url` está vacío (plantilla nativa
   de Creator vs HTML→PDF en Catalyst vs servicio existente) y con qué datos; relación form
   `Informes` ↔ `Analisis`. La forma de `InformeRevision` (`types.ts`) es **PLACEHOLDER** hasta cerrar esto.
-- **CRM.** API names exactos de `Contacts`/`Deals`/`Accounts`; si `Agendamiento Ready` es un valor
-  de picklist existente y su API name.
+- **CRM.** API names exactos de los módulos estándar `Contacts`/`Deals`/`Accounts`. ✅ Resuelto:
+  Stage = `Nueva Solicitud`; campos custom `Cedula` (Contacts) y `EXTERNAL_ID` (Deals) creados.
 - **Catalyst (⚠️ verificar — docs oficiales/consola).** Streaming/chunked real y tope de payload en
   Advanced I/O (afecta `GET …/pdf` y el body máximo del POST); atomicidad del increment en Catalyst
   Cache (cap distribuido, §7); setup de la Connection OAuth a CRM; puerto exacto de `catalyst serve`

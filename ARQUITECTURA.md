@@ -30,7 +30,7 @@ nunca habla con Zoho directo ni ve una URL, fileId o ruta interna.
 
 | Endpoint | Scope | Qué hace | Upstream |
 |----------|-------|----------|----------|
-| `POST /v1/opportunity-contact` | `opportunities:create` | Crea/reutiliza Contacto (dedup por cédula `NroCedula`) + crea Oportunidad en estado fijo `Agendamiento Ready`. Payload plano de ML; idempotente por `NroSolicitud` (del body). | Zoho CRM (Contacts/Deals/Accounts) |
+| `POST /v1/opportunity-contact` | `opportunities:create` | Crea/reutiliza Contacto (dedup por cédula `NroCedula`) + crea Oportunidad en estado fijo `Nueva Solicitud`. Payload plano de ML; idempotente por `NroSolicitud` (del body). | Zoho CRM (Contacts/Deals/Accounts) |
 | `GET /v1/informes` | `reports:read` | Lista los Informes de Revisión de la automotora autenticada (filtros controlados + cursor opaco). | Zoho Creator |
 | `GET /v1/informes/:id/pdf` | `reports:pdf` | Stream autenticado del PDF, sin URL pública ni ubicación interna. | Zoho Creator + WorkDrive |
 | `GET /v1/health` | — (abierto) | Health check para monitoreo de disponibilidad. | — |
@@ -103,7 +103,7 @@ cardoc-ml/
 
 | Package | Responsabilidad | Tiene SDK / HTTP / Express |
 |---------|-----------------|----------------------------|
-| `@cardoc/domain` | Lenguaje interno del sistema: tipos (`Scope`, `ContactInput`, `InformeRevision`, …), schemas Zod (`opportunityContactSchema`, `listInformesQuerySchema`), `idempotency.payloadFingerprint`, `tokens.hashToken`/`generateToken`, la constante `FIXED_OPPORTUNITY_STAGE = "Agendamiento Ready"`. | No. Node puro (`node:crypto`, `zod`). |
+| `@cardoc/domain` | Lenguaje interno del sistema: tipos (`Scope`, `ContactInput`, `InformeRevision`, …), schemas Zod (`opportunityContactSchema`, `listInformesQuerySchema`), `idempotency.payloadFingerprint`, `tokens.hashToken`/`generateToken`, la constante `FIXED_OPPORTUNITY_STAGE = "Nueva Solicitud"`. | No. Node puro (`node:crypto`, `zod`). |
 | `@cardoc/providers` | Puertos `CrmClient` y `ReportsSource`, errores tipados (`UpstreamError`, `ReportNotFoundError`, `PdfNotAvailableError`, `NotImplementedError`), y los adapters: `MockCrmClient`/`MockReportsSource` (funcionales para dev/test/e2e) y `ZohoCrmClient`/`ZohoCreatorReportsSource` (stubs `NotImplemented`). | **Sí** — es el único lugar autorizado a HTTP externo (CRM/Creator/WorkDrive). |
 | `@cardoc/persistence` | `entities` (filas del DataStore en camelCase), repositorios = **puertos** (`TokensRepository`, `ConsumersRepository`, `OpportunitiesRepository`, `AuditLogRepository`, `CapRepository`), `catalyst.ts` = impl DataStore, `memory.ts` = fakes in-memory. | DataStore por **tipado estructural** (`CatalystAppLike`), sin importar el SDK. |
 | `@cardoc/application` | Use-cases: `createOpportunityContact`, `listInformes`, `streamReportPdf`. Orquestan dominio + puertos. | No. Solo tipos de los otros packages. |
@@ -231,7 +231,7 @@ Esquema del POST (`schemas.ts`):
 
 **Tenancy: 1 automotora = 1 Cuenta CRM (`crm_account_id`, módulo Accounts) = 1
 consumidor/token.** La Oportunidad se crea en el módulo Deals, en estado fijo
-`Agendamiento Ready` fijado **server-side** (`FIXED_OPPORTUNITY_STAGE`), nunca del body.
+`Nueva Solicitud` fijado **server-side** (`FIXED_OPPORTUNITY_STAGE`), nunca del body.
 
 | Mecanismo | Implementación |
 |-----------|----------------|
@@ -348,7 +348,7 @@ Confirmadas por Nestor Toñanez, 2026-06-25.
 ## 11. Pendientes de validación (de-risk pre-producción)
 
 Las open questions de **negocio** (generación del PDF, relación `Informes`↔`Analisis`,
-módulos CRM, picklist `Agendamiento Ready`) y de **plataforma** (streaming/payload en
+API names de los módulos CRM estándar) y de **plataforma** (streaming/payload en
 Advanced I/O, atomicidad del increment en Cache, setup de la Connection OAuth, residencia
 de la PII, SLA/quotas/cold-start, retención de logs, backup/export del DataStore) viven en
 el registro único — **[docs/OPEN-QUESTIONS.md](docs/OPEN-QUESTIONS.md)**. No se repiten acá

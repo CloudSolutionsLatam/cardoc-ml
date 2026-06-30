@@ -369,7 +369,7 @@ Estas no se inventan: son validaciones pendientes que impactan deploy/rollback e
 | Backup | Mecanismo de backup/export del DataStore | Recuperación cuando el rollback de código no alcanza (§9) |
 | Smoke automatizado | Formalizar el smoke manual como script versionado | Reemplazaría el procedimiento manual de §7 |
 
-Open questions de **negocio** (no de deploy, no se resuelven acá): generación del PDF cuando `Analisis.pdf_url` está vacío, relación form `Informes`↔`Analisis`, API names exactos de Contacts/Deals/Accounts y si `Agendamiento Ready` es un valor de picklist existente. Ver [`../../PLAN-DE-DESARROLLO.md`](../../PLAN-DE-DESARROLLO.md).
+Open questions de **negocio** (no de deploy, no se resuelven acá): generación del PDF cuando `Analisis.pdf_url` está vacío, relación form `Informes`↔`Analisis` y API names de los módulos CRM estándar. (Stage = `Nueva Solicitud`, campos `Cedula`/`EXTERNAL_ID` ✅ resueltos.) Ver [`../../PLAN-DE-DESARROLLO.md`](../../PLAN-DE-DESARROLLO.md).
 
 ---
 

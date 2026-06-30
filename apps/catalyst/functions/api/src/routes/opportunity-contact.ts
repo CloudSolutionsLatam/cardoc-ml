@@ -1,6 +1,6 @@
 /**
  * POST /v1/opportunity-contact — crea/reutiliza Contacto + crea Oportunidad
- * ('Agendamiento Ready', server-side). Idempotente por `NroSolicitud` (del body).
+ * ('Nueva Solicitud', server-side). Idempotente por `NroSolicitud` (del body).
  *
  * La ruta solo valida forma y traduce el outcome del use-case a HTTP.
  */

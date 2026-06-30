@@ -48,10 +48,13 @@ export interface OpportunityContactInput {
 }
 
 /**
- * Estado fijo de la Oportunidad creada. Se fija SIEMPRE server-side; nunca se
- * acepta del body del request.
+ * Estado fijo de la Oportunidad (Deal.Stage) al crearla. Se fija SIEMPRE
+ * server-side; nunca se acepta del body del request.
+ *
+ * Valor de picklist confirmado por Nestor (2026-06-30), provisional ("por ahora").
+ * Es la única fuente de verdad: cambiarlo acá lo propaga a toda la API.
  */
-export const FIXED_OPPORTUNITY_STAGE = "Agendamiento Ready" as const;
+export const FIXED_OPPORTUNITY_STAGE = "Nueva Solicitud" as const;
 
 // ── GET /v1/informes ─────────────────────────────────────────────────────────
 

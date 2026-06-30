@@ -13,6 +13,17 @@ export interface CrmConnection {
   apiDomain: string;
 }
 
+/**
+ * API names de los campos custom del CRM (creados por Nestor, 2026-06-30). El
+ * adapter real (E-02) los usa para mapear el payload de ML a los módulos Zoho.
+ */
+export const ZOHO_CRM_FIELDS = {
+  /** Contacts: cédula del cliente — llave de deduplicación (ADR-0003). */
+  contactCedula: "Cedula",
+  /** Deals: External ID — persiste el `NroSolicitud` de AutoCheck (ADR-0002). */
+  dealExternalId: "EXTERNAL_ID",
+} as const;
+
 /** Datos del Contacto a crear (de lo que manda ML). Dedup por `nroCedula`. */
 export interface CrmContactData {
   nroCedula: number;
@@ -21,7 +32,7 @@ export interface CrmContactData {
   celular?: string;
 }
 
-/** Datos de la Oportunidad (Deal) a crear. `nroSolicitud` = External ID. */
+/** Datos de la Oportunidad (Deal) a crear. `nroSolicitud` = External ID (`EXTERNAL_ID`). */
 export interface CrmOpportunityData {
   nroSolicitud: number;
   /** Cuenta (Account "ML") — del token, nunca del payload. */
@@ -76,9 +87,10 @@ export class MockCrmClient implements CrmClient {
 
 /**
  * Adapter real de Zoho CRM (REST v2). STUB — se implementa en E-02 con el **self-client**
- * (client_id/secret/refresh_token en env cifrada; el adapter renueva el access token) una
- * vez confirmados los API names de Contacts/Deals/Accounts y los campos custom
- * (`Cedula` en Contacts, External ID en Deals). Único lugar autorizado a HTTP a CRM.
+ * (client_id/secret/refresh_token en env cifrada; el adapter renueva el access token).
+ * Campos custom ya creados (ver `ZOHO_CRM_FIELDS`): `Cedula` en Contacts (ADR-0003),
+ * `EXTERNAL_ID` en Deals (ADR-0002). Falta confirmar los API names de los módulos
+ * estándar. Único lugar autorizado a HTTP a CRM.
  */
 export class ZohoCrmClient implements CrmClient {
   async findContactByCedula(_nroCedula: number, _conn: CrmConnection): Promise<{ id: string } | null> {

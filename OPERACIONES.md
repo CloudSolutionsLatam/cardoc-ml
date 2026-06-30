@@ -233,8 +233,8 @@ suposición; se de-riskean en E-02/E-03 con validación en consola/docs oficiale
   Catalyst y hacer write-back a `Analisis.pdf_url` → luego stream. Falta definir el
   generador (plantilla nativa de Creator vs HTML→PDF en Catalyst vs servicio existente) y
   de qué datos sale. Relación entre los forms `Informes` y `Analisis` en Creator.
-- **CRM**: API names exactos de Contacts/Deals/Accounts; si `Agendamiento Ready` es un
-  valor de picklist existente y su API name (hoy se fija server-side como estado de la Deal).
+- **CRM**: API names exactos de los módulos estándar Contacts/Deals/Accounts. ✅ Stage de la Deal
+  = `Nueva Solicitud` (confirmado, provisional); campos custom `Cedula` y `EXTERNAL_ID` creados.
 
 **Plataforma Catalyst — ⚠️ verificar (docs/consola oficiales):**
 

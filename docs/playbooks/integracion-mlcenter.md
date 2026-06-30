@@ -11,7 +11,7 @@ last_reviewed: 2026-06-25
 
 | Sentido | Quién llama | Qué pasa |
 |---------|-------------|----------|
-| **IN** | ML → cardoc | ML carga una **solicitud AutoCheck** vía `POST /v1/opportunity-contact`. Se crea una **Oportunidad (Deal)** en Zoho CRM (`Stage = Agendamiento Ready`) con Contacto + Cuenta. El `NroSolicitud` de AutoCheck es el **External ID** de la Oportunidad. |
+| **IN** | ML → cardoc | ML carga una **solicitud AutoCheck** vía `POST /v1/opportunity-contact`. Se crea una **Oportunidad (Deal)** en Zoho CRM (`Stage = Nueva Solicitud`) con Contacto + Cuenta. El `NroSolicitud` de AutoCheck es el **External ID** de la Oportunidad. |
 | **OUT** | cardoc → ML | Cuando la solicitud cambia de estado (en CRM), cardoc le **notifica a ML** vía `POST /api/autocheck/estado/actualizar`. |
 
 Este playbook cubre el lado **OUTBOUND** (la notificación de estado). Decisión:
@@ -81,7 +81,7 @@ contra el sandbox de ML (faltan credenciales).
   informe (Creator/WorkDrive `pdf_url`) o un link público distinto?
 - **[OQ-P9](../OPEN-QUESTIONS.md)** — credenciales `authenticatecardoc` (Usuario/Password) →
   Catalyst Environment Variables; y URL prod vs testing.
-- Crear el campo **External ID** en el Deal (CRM) para persistir el `NroSolicitud`
+- ✅ Campo **External ID** (API `EXTERNAL_ID`) creado en Deals para persistir el `NroSolicitud`
   ([ADR-0002](../decisions/README.md#adr-0002)).
 
 ## Operación

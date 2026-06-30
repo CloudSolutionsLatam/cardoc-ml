@@ -10,7 +10,7 @@ API en **Zoho Catalyst** (Advanced I/O) para automotoras. Tres endpoints `/v1`:
 
 | Endpoint | Scope | Qué hace |
 |----------|-------|----------|
-| `POST /v1/opportunity-contact` | `opportunities:create` | Crea/reutiliza Contacto (dedup por cédula) + crea Oportunidad `Agendamiento Ready` en **Zoho CRM** (Deals/Accounts). Payload plano de ML; idempotente por `NroSolicitud`. |
+| `POST /v1/opportunity-contact` | `opportunities:create` | Crea/reutiliza Contacto (dedup por cédula) + crea Oportunidad `Nueva Solicitud` en **Zoho CRM** (Deals/Accounts). Payload plano de ML; idempotente por `NroSolicitud`. |
 | `GET /v1/informes` | `reports:read` | Lista los Informes de Revisión de la automotora autenticada (filtros controlados + cursor). Fuente: **Zoho Creator**. |
 | `GET /v1/informes/{id}/pdf` | `reports:pdf` | Stream autenticado del PDF, sin URL pública ni ubicación interna. |
 
@@ -107,5 +107,5 @@ catalyst deploy
 ## Open questions (E-02/E-03)
 
 Registro único: **[docs/OPEN-QUESTIONS.md](docs/OPEN-QUESTIONS.md)** — negocio (generación
-del PDF, relación `Informes`↔`Analisis`, módulos CRM, picklist `Agendamiento Ready`) y
+del PDF, relación `Informes`↔`Analisis`, API names de los módulos CRM estándar) y
 plataforma (streaming, Cache, Connection, residencia PII, SLA, logs, backup).

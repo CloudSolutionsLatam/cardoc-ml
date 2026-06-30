@@ -116,8 +116,9 @@ implementarlos:
    del puerto. **El `fetch`/HTTP externo solo puede vivir acá** (lo exige el lint).
 3. `apps/catalyst/functions/api/src/container.ts` — activá el adapter real con el flag
    (`CARDOC_CRM_MODE=zoho` / `CARDOC_REPORTS_MODE=creator`).
-4. **Bloqueado por open questions** (ver abajo): API names de Contacts/Deals/Accounts,
-   picklist `Agendamiento Ready`, y el flujo de generación del PDF. Confirmá con Nestor
+4. **Parcialmente bloqueado** (ver abajo): faltan los API names de los módulos estándar
+   Contacts/Deals/Accounts y el flujo del PDF. ✅ Stage = `Nueva Solicitud`, campos
+   `Cedula`/`EXTERNAL_ID` creados. Confirmá con Nestor
    antes de codear sobre supuestos.
 
 ### "Tocar auth, scopes, tenancy o cap"
@@ -225,8 +226,8 @@ fronteras hexagonales). Una ADR aceptada no se cambia sin una nueva que la super
   primer argumento de todo repo. (ver árbol de decisión arriba).
 - **Fronteras hexagonales.** Dominio sin SDK/Express; HTTP externo solo en `providers`;
   SDK de Catalyst solo en la función. Lo verifica `eslint`.
-- **Idempotencia y estado fijo.** El POST no duplica (UNIQUE); el estado `Agendamiento
-  Ready` se fija **server-side**, nunca del body.
+- **Idempotencia y estado fijo.** El POST no duplica (UNIQUE); el estado `Nueva
+  Solicitud` se fija **server-side**, nunca del body.
 - **Smoke antes de handoff.** Typecheck + build NO es "listo". Corré el smoke e2e (o
   `curl` los endpoints) y leé la respuesta. cardoc corre en local sin Catalyst (ver abajo).
 - **No commit sin OK explícito del owner.** Tampoco `push --force`, `reset --hard` ni
@@ -273,7 +274,7 @@ cardoc-ml/
 
 Registro único: **[OPEN-QUESTIONS.md](OPEN-QUESTIONS.md)**. Antes de cablear E-02/E-03,
 confirmá las de **negocio** (OQ-N\*: generación del PDF, relación `Informes`↔`Analisis`, API
-names CRM, picklist `Agendamiento Ready`) con Nestor, y las de **plataforma** (OQ-P\*:
+names de los módulos CRM estándar) con Nestor, y las de **plataforma** (OQ-P\*:
 streaming/Cache/Connection/residencia/SLA/logs/backup) contra la consola.
 
 ## Cuando tengas dudas

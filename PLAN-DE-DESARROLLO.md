@@ -127,13 +127,13 @@ rechazo del UNIQUE), y el contrato de la `CrmConnection`.
 
 | Tarea | Salida | Bloqueo |
 |-------|--------|---------|
-| Implementar `findContactByCedula` / `createContact` / `createOpportunity` contra Zoho CRM REST | Stubs `NotImplemented` → HTTP real | **CRM-Q1, CRM-Q2** (API names + picklist) |
+| Implementar `findContactByCedula` / `createContact` / `createOpportunity` contra Zoho CRM REST | Stubs `NotImplemented` → HTTP real | **CRM-Q1** (API names de módulos estándar); CRM-Q2 ✅ resuelta |
 | Resolver la Catalyst Connection OAuth en runtime (hoy `resolveCrmConnection` devuelve stub) | `accessToken` real desde la Connection gestionada | **CAT-Q5** (setup Connection) |
 | Activar `CARDOC_PERSISTENCE=datastore`: crear tablas y el `UNIQUE(account_id, idempotency_key)` en consola | Idempotencia con red física, no solo lógica | **CAT-Q2** (atomicidad) — el UNIQUE del DataStore es el ancla; ⚠️ verificar (docs oficiales/consola) que el `insertRow` rechaza el segundo concurrente |
 | Sembrar `consumers` + `api_tokens` reales (hash del token, scopes, Cuenta) | 1 automotora = 1 Cuenta CRM = 1 token | — |
 
 **Definición de hecho (M1)**: con `CARDOC_CRM_MODE=zoho` y `CARDOC_PERSISTENCE=datastore`, un POST
-real crea Contacto (dedup por cédula `NroCedula`) + Oportunidad en estado `Agendamiento Ready`
+real crea Contacto (dedup por cédula `NroCedula`) + Oportunidad en estado `Nueva Solicitud`
 (fijado server-side, módulo Deals); reintento con mismo `NroSolicitud` → `duplicate`; mismo número con
 payload distinto → 409.
 
@@ -250,7 +250,7 @@ OAuth y secretos en [docs/playbooks/secretos-y-connections.md](docs/playbooks/se
 | Dependencia | Impacta a | Mitigación |
 |-------------|-----------|------------|
 | Definición del negocio de PDF (cómo se genera, de qué datos, relación `Informes`↔`Analisis`) | E-03 / M2 | Resolver con el dueño funcional **antes** del 26/06; sin esto E-03 no arranca |
-| API names exactos de Contacts/Deals/Accounts + picklist `Agendamiento Ready` | E-02 / M1 | Confirmar con quien administra el CRM de cardoc; bloquea el adapter real |
+| API names exactos de los módulos estándar Contacts/Deals/Accounts (Stage = `Nueva Solicitud` ✅; campos `Cedula`/`EXTERNAL_ID` ✅ creados) | E-02 / M1 | Confirmar los API names estándar con quien administra el CRM; el resto del mapeo ya está |
 | Setup de la Catalyst Connection OAuth a CRM | E-02 / M1 | Provisionar en consola en paralelo a E-01→E-02 |
 | Validaciones de plataforma Catalyst (de-risk pre-producción) | E-04 / M3 / M4 | Correr en paralelo, no toca código de E-01 |
 
@@ -267,7 +267,7 @@ o con la consola/docs de Catalyst.
   Creator vs HTML→PDF en Catalyst vs servicio existente).
 - **PDF-Q2**: ¿de qué datos sale el PDF y cuál es la relación entre los forms `Informes` y `Analisis`?
 - **CRM-Q1**: API names exactos de los módulos Contacts / Deals / Accounts.
-- **CRM-Q2**: ¿`Agendamiento Ready` es un valor de picklist existente? ¿cuál es su API name?
+- **CRM-Q2**: ✅ Resuelto (Nestor 2026-06-30) — Stage de Deals = `Nueva Solicitud` (provisional); campos custom `Cedula` (Contacts) y `EXTERNAL_ID` (Deals) creados.
 
 ### Plataforma Catalyst (de-risk antes de producción)
 

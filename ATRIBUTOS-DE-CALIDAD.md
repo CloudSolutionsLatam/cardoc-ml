@@ -57,7 +57,7 @@ DataStore), no una verificación de buena fe en código. El use-case siembra un 
 | Mismo NroSolicitud + payload distinto | **409 IDEMPOTENCY_CONFLICT** (semántica Stripe). `payloadFingerprint` (SHA-256 canónico, claves ordenadas) se persiste con la fila; si difiere del fingerprint guardado → conflicto | Test unitario de `payloadFingerprint` (`packages/domain/test/idempotency.test.ts`) + test del use-case que cubre el branch `status: "conflict"` |
 | Dedup de Contacto | **Por cédula (`NroCedula`)**: `findContactByCedula` antes de crear; si existe, se reutiliza (`reusedContact: true`). Requiere campo `Cedula` custom en Contacts | Test del use-case (rama "contacto reutilizado por cédula"); contra Mock CRM hoy, contra Zoho CRM en E-02 |
 | Atomicidad del seed | El row `pending` se inserta con `insertIfAbsent`; si no se creó (otro flujo ganó la carrera), no se ejecuta el efecto externo | Cubierto por el test concurrente. **Depende de** que el DataStore garantice la unicidad real bajo concurrencia → validación de plataforma (§9, ítem 2) |
-| Estado de la Oportunidad | Fijo `Agendamiento Ready`, fijado **server-side** (`FIXED_OPPORTUNITY_STAGE`), nunca elegido por el consumidor | Inspección de código; el valor de picklist exacto del CRM es open question (§9 negocio) |
+| Estado de la Oportunidad | Fijo `Nueva Solicitud`, fijado **server-side** (`FIXED_OPPORTUNITY_STAGE`), nunca elegido por el consumidor | Inspección de código; valor de picklist confirmado (Nestor 2026-06-30, provisional) |
 
 ---
 
@@ -155,7 +155,7 @@ estructura de configs (`catalyst.json`, `catalyst-config.json` con `stack: node2
 | # | Qué validar | Atributo que sustenta |
 |---|-------------|----------------------|
 | 1 | **PDF (negocio)**: cómo se genera cuando `Analisis.pdf_url` está vacío (plantilla nativa de Creator vs HTML→PDF en Catalyst vs servicio existente) y de qué datos sale. Relación entre los forms `Informes` y `Analisis` | Confidencialidad/Costo del PDF (§2, §8) |
-| 2 | **CRM (negocio)**: API names exactos de Contacts/Deals/Accounts; si `Agendamiento Ready` es un valor de picklist existente y su API name | Integridad / no-duplicación (§2) |
+| 2 | **CRM (negocio)**: API names exactos de los módulos estándar Contacts/Deals/Accounts. ✅ Stage = `Nueva Solicitud`; campos custom `Cedula` (Contacts) y `EXTERNAL_ID` (Deals) creados | Integridad / no-duplicación (§2) |
 | 3 | **Streaming y payload** ⚠️: streaming/chunked real y tope de payload en Advanced I/O | Performance / confidencialidad del PDF (§5, §2) |
 | 4 | **Cache (atomicidad)** ⚠️: atomicidad del increment en Catalyst Cache para el cap distribuido (hoy los contadores son in-memory por contenedor) | Cap (§7) |
 | 5 | **Connection OAuth** ⚠️: setup de la Catalyst Connection a Zoho CRM (auth gestionada) | Seguridad / auth a CRM (§3) |
@@ -178,7 +178,7 @@ Cronograma sprint 22/06→03/07/2026 (owner Nestor Toñanez, 1 dev). Ver
 | Etapa | Atributos que entrega |
 |-------|----------------------|
 | **E-01 — Scaffold (completo, deployable)** | Pipeline de middlewares con orden fijo, sobre de error único, tenancy del token, scopes por ruta, idempotencia + `payloadFingerprint`, cap (best-effort in-memory), auditoría on-finish, build/bundle/deploy en verde. Path in-memory + Mock CRM/Reports |
-| **E-02 — Adapters CRM** | `ZohoCrmClient` real (self-client OAuth), dedup por cédula contra Zoho, creación de Deal `Agendamiento Ready`; medición de latencia end-to-end real |
+| **E-02 — Adapters CRM** | `ZohoCrmClient` real (self-client OAuth), dedup por cédula contra Zoho, creación de Deal `Nueva Solicitud`; medición de latencia end-to-end real |
 | **E-03 — Adapters Creator/WorkDrive + PDF** | `ZohoCreatorReportsSource` real, streaming del PDF, generación perezosa + write-back; cierre de las open questions de PDF |
 | **Pre-producción** | Las validaciones de plataforma (§9): Cache atómico para cap duro, streaming/payload, residencia, SLA/quotas, retención, backup/export del DataStore |
 
