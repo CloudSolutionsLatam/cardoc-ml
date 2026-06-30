@@ -148,7 +148,8 @@ interface ZohoWriteResponse {
   data?: Array<{
     code?: string;
     message?: string;
-    details?: { id?: string };
+    /** En éxito trae `id`; en error (p.ej. INVALID_DATA) trae `api_name` del campo culpable. */
+    details?: { id?: string; api_name?: string; [key: string]: unknown };
     /** En `DUPLICATE_DATA`, el registro existente que disparó el duplicado. */
     duplicate_record?: { id?: string };
   }>;
@@ -205,7 +206,7 @@ export class ZohoCrmClient implements CrmClient {
     const record: Record<string, unknown> = {
       [f.lastName]: data.apellidos,
       [f.firstName]: data.nombres,
-      [f.cedula]: data.nroCedula,
+      [f.cedula]: String(data.nroCedula), // `Cedula` es campo TEXT en Zoho (no number)
       [f.account]: { id: data.accountId },
     };
     if (data.celular) record[f.mobile] = data.celular;
@@ -257,7 +258,8 @@ export class ZohoCrmClient implements CrmClient {
       return { id: String(dupId), duplicate: true };
     }
     if (!res.ok || row?.code !== "SUCCESS" || !row?.details?.id) {
-      const reason = row?.code ? `${row.code}${row.message ? `: ${row.message}` : ""}` : `HTTP ${res.status}`;
+      const detail = row?.details ? ` ${JSON.stringify(row.details)}` : "";
+      const reason = row?.code ? `${row.code}${row.message ? `: ${row.message}` : ""}${detail}` : `HTTP ${res.status}`;
       throw new UpstreamError("crm", res.status, `${module} create rechazado (${reason})`);
     }
     return { id: String(row.details.id), duplicate: false };

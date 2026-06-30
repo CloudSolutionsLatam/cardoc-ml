@@ -66,11 +66,11 @@ try {
 
   const contactoExistente = await crm.findContactByCedula(ej.NroCedula, conn);
   console.log(`  findContactByCedula(${ej.NroCedula}) →`, contactoExistente);
-  const dealExistente = await crm.findDealByExternalId(ej.NroSolicitud, conn);
-  console.log(`  findDealByExternalId(${ej.NroSolicitud}) →`, dealExistente);
 
   if (!write) {
-    console.log("\n✓ READ-only OK. Para crear registros reales (Contacto+Oportunidad): pnpm zoho:check --write");
+    console.log(
+      "\n✓ READ-only OK (auth + scopes + conectividad). El dedup del Deal por EXTERNAL_ID se prueba al crear; para el alta real: pnpm zoho:check --write",
+    );
     process.exit(0);
   }
 
@@ -82,22 +82,23 @@ try {
       { nroCedula: ej.NroCedula, nombres: ej.Nombres, apellidos: ej.Apellidos, celular: ej.Celular, accountId },
       conn,
     ));
-  console.log("  Contacto →", contact, contactoExistente ? "(reusado por cédula)" : "(creado)");
-  const opp =
-    dealExistente ??
-    (await crm.createOpportunity(
-      {
-        nroSolicitud: ej.NroSolicitud,
-        contactId: contact.id,
-        stage: FIXED_OPPORTUNITY_STAGE,
-        marca: ej.Marca,
-        modelo: ej.Modelo,
-        anio: ej.Anio,
-        matricula: ej.Matricula,
-      },
-      conn,
-    ));
-  console.log("  Oportunidad →", opp, dealExistente ? "(ya existía por EXTERNAL_ID)" : "(creada)");
+  // contact viene de findContactByCedula ({id}) o de createContact ({id, duplicate}).
+  const contactReused = Boolean(contactoExistente) || contact.duplicate === true;
+  console.log("  Contacto →", contact.id, contactReused ? "(reusado)" : "(creado)");
+  // La dedup del Deal la hace el CRM: createOpportunity devuelve {id, duplicate} (DUPLICATE_DATA por EXTERNAL_ID).
+  const opp = await crm.createOpportunity(
+    {
+      nroSolicitud: ej.NroSolicitud,
+      contactId: contact.id,
+      stage: FIXED_OPPORTUNITY_STAGE,
+      marca: ej.Marca,
+      modelo: ej.Modelo,
+      anio: ej.Anio,
+      matricula: ej.Matricula,
+    },
+    conn,
+  );
+  console.log("  Oportunidad →", opp.id, opp.duplicate ? "(ya existía por EXTERNAL_ID — DUPLICATE_DATA)" : "(creada)");
   console.log("\n✓ alta real OK — verificá el Contacto + la Oportunidad en el CRM.");
 } catch (e) {
   console.error("\n✗ FALLÓ:", e instanceof Error ? e.message : String(e));

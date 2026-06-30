@@ -55,7 +55,7 @@ describe("ZohoCrmClient.createContact", () => {
     const rec = bodyOf(calls[0]!).data[0]!;
     expect(rec["Last_Name"]).toBe("Pérez");
     expect(rec["First_Name"]).toBe("Juan");
-    expect(rec["Cedula"]).toBe(45321890);
+    expect(rec["Cedula"]).toBe("45321890"); // TEXT en Zoho
     expect(rec["Mobile"]).toBe("099");
     expect(rec["Account_Name"]).toEqual({ id: "ACC-ML" });
   });
