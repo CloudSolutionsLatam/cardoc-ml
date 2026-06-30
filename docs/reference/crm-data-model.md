@@ -43,7 +43,7 @@ discovery del CRM. **No duplica** ese discovery: es la proyección mínima para 
 | `nombres` | `First_Name` | text (40) | — |
 | `apellidos` | `Last_Name` | text (80) | **Único `system_mandatory`** del módulo. |
 | `celularCliente` | `Mobile` | phone (30) | **OJO: no existe `Phone`** en este CRM; el teléfono de persona es `Mobile`. |
-| (Cuenta "ML") | `Account_Name` | lookup → `Accounts` | Así cuelga la Cuenta del Contacto (ver §estructura). |
+| (Cuenta "ML") | `Account_Name` | lookup → `Accounts` | **Decisión CRM-Q3:** la Cuenta "ML" se asocia **acá** (el Deal no lleva Cuenta). |
 | — | `Email` | email (100) | ML no manda email. |
 
 ## `Deals` — `createOpportunity`
@@ -52,9 +52,10 @@ discovery del CRM. **No duplica** ese discovery: es la proyección mínima para 
 |---|---|---|---|
 | (fijo) | `Deal_Name` | text (120) | `system_mandatory`. Componer (ej. `"ML <NroSolicitud>"`). |
 | (fijo) | `Stage` | picklist | `system_mandatory`. Valor = `FIXED_OPPORTUNITY_STAGE` = `"Nueva Solicitud"` (sin verificar contra picklist). |
-| — | `Pipeline` | picklist | **`system_mandatory`** — hay que enviarlo. Valor por confirmar. |
+| (fijo) | `Pipeline` | picklist | **`system_mandatory`**. Existe un Pipeline específico para AutoCheck (**CRM-Q5**) — valor pendiente de que Nestor lo pase. |
 | (contacto creado) | `Contact_Name` | lookup → `Contacts` | `{ "Contact_Name": { "id": "<contactId>" } }`. |
 | `nroSolicitud` | `EXTERNAL_ID` | (custom) | **No estaba en el dump** (creado 2026-06-30). |
+| `marca`/`modelo`/`anio`/`matricula` (+ sucursal/dir.) | `nota_agenda` | textarea | **Decisión CRM-Q4:** el adapter compone un texto con el vehículo + sucursal y lo escribe acá. **No** se modela `Products`. |
 
 **Agenda (opcional, fase posterior)** — campos reales en Deals si se decide poblarlos:
 `Inspector` (→`Inspectores`), `Vehiculo` (→`Products`),
@@ -72,17 +73,16 @@ segmentan. Único lookup outbound: `Owner` → user (es la raíz).
 ## Hallazgos estructurales (cambian el diseño del adapter)
 
 1. **Deals NO tiene lookup a `Accounts`.** El único lookup "de cuenta" es
-   `Deals.Contact_Name` → `Contacts`, y `Contacts.Account_Name` → `Accounts`. ⇒ la
-   Cuenta "ML" se asocia **en el Contacto**, no en la Oportunidad. `createContact`
-   setea `Account_Name`; `createOpportunity` NO tiene dónde poner la Cuenta. *(Salvo
-   que se cree un lookup custom Cuenta en Deals.)* → **CRM-Q3**.
+   `Deals.Contact_Name` → `Contacts`, y `Contacts.Account_Name` → `Accounts`. → **Resuelto
+   (CRM-Q3): vía Contacto** — `createContact` setea `Account_Name`; el Deal solo linkea
+   el Contacto (no se crea lookup Cuenta en Deals).
 2. **`Pipeline` es `system_mandatory`** en Deals: el create debe enviarlo además del
-   `Stage`. Valor por confirmar (picklist, no verificable desde el dump).
+   `Stage`. → hay un **Pipeline específico** de AutoCheck (**CRM-Q5**), valor pendiente
+   (picklist, no verificable desde el dump).
 3. **Vehículo = lookup, no texto.** `Deals.Vehiculo` → `Products`; y `Products.Marca`
-   → `Marcas`, `Products.Modelo` → `Modelos` (también lookups). ⇒ poblar el vehículo
-   exige resolver/crear registros en `Marcas`/`Modelos` y `Products` antes del Deal.
-   Además **no hay campo de matrícula/placa** en `Products` (candidatos: `Product_Code`,
-   `Product_Name`, o el módulo `Veh_culos_Historico`). → **CRM-Q4**.
+   → `Marcas`, `Products.Modelo` → `Modelos` (también lookups); **sin campo de matrícula**.
+   → **Resuelto (CRM-Q4): NO se modela `Products`** — el adapter vuelca marca/modelo/año/
+   matrícula (+ sucursal) como texto en `nota_agenda` del Deal.
 4. **Estados.** El field-tracker `Historial_de_Estado` trackea
    `Informes_Revision.Estado`, **no** `Deals.Stage`. Define para [OQ-N6](../OPEN-QUESTIONS.md)
    (outbound a ML) cuál es la fuente real del estado: el `Stage` del Deal o el `Estado`
@@ -90,9 +90,10 @@ segmentan. Único lookup outbound: `Owner` → user (es la raíz).
 
 ## Pendiente de confirmar
 
-- **CRM-Q1** (parcialmente resuelta): api_names estándar capturados acá; faltan los
-  **valores de picklist** (`Stage` incluido) vía `settings/fields`.
-- **CRM-Q3**: ¿la Oportunidad se vincula a la Cuenta "ML" sólo vía Contacto, o se crea
-  un lookup Cuenta custom en Deals?
-- **CRM-Q4**: alcance del vehículo (resolver `Products`/`Marcas`/`Modelos` vs. diferir).
-- **Pipeline**: ¿qué valor enviar (mandatorio)?
+- **CRM-Q1** (parcial): api_names estándar capturados acá; faltan los **valores de
+  picklist** vía `GET /settings/fields?module=Deals` — en particular **confirmar el string
+  exacto del `Stage` ("Nueva Solicitud")** y el valor del `Pipeline`.
+- **CRM-Q3**: ✅ Resuelto — Cuenta "ML" vía Contacto (`Contacts.Account_Name`).
+- **CRM-Q4**: ✅ Resuelto — vehículo como texto en `nota_agenda`; no se modela `Products`.
+- **CRM-Q5**: valor del `Pipeline` específico de AutoCheck (pendiente de que Nestor lo pase).
+- **OAuth** ([OQ-P3](../OPEN-QUESTIONS.md)): self-client (client_id/secret/refresh_token) para escribir en CRM.

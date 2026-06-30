@@ -271,11 +271,12 @@ o con la consola/docs de Catalyst.
   Falta: **valores de picklist** (incl. `Stage`) vía `GET /settings/fields?module=Deals` (el
   discovery no los trae).
 - **CRM-Q2**: ✅ Resuelto (Nestor 2026-06-30) — Stage de Deals = `Nueva Solicitud` (provisional); campos custom `Cedula` (Contacts) y `EXTERNAL_ID` (Deals) creados.
-- **CRM-Q3**: Deals **no tiene lookup a Accounts** → ¿la Cuenta "ML" cuelga sólo del Contacto
-  (`Contacts.Account_Name`) o se crea un lookup Cuenta custom en Deals?
-- **CRM-Q4**: Vehículo = lookup (`Deals.Vehiculo`→`Products`, con `Marca`/`Modelo` también lookups
-  y **sin campo de matrícula**) → ¿se modela en E-02 (resolver Products/Marcas/Modelos) o se difiere?
-- **CRM-Q5**: `Pipeline` es `system_mandatory` en Deals → ¿qué valor enviar al crear? (picklist).
+- **CRM-Q3**: ✅ Resuelto (Nestor 2026-06-30) — Cuenta "ML" **vía Contacto** (`Contacts.Account_Name`);
+  el Deal no lleva Cuenta (no se crea lookup en Deals).
+- **CRM-Q4**: ✅ Resuelto (Nestor 2026-06-30) — vehículo como **texto en `nota_agenda`** del Deal;
+  no se modela `Products`/`Marcas`/`Modelos`.
+- **CRM-Q5**: `Pipeline` (`system_mandatory`) — hay un **Pipeline específico** de AutoCheck; falta el
+  valor exacto (junto con el string del `Stage`, vía `GET /settings/fields?module=Deals`).
 
 ### Plataforma Catalyst (de-risk antes de producción)
 
