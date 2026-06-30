@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { MockCrmClient, type CrmClient, type CrmConnection } from "@cardoc/providers";
+import { MockCrmClient, type CrmClient, type CrmConnection, type CrmWriteResult } from "@cardoc/providers";
 import { InMemoryOpportunitiesRepository } from "@cardoc/persistence";
 import { createOpportunityContact } from "../src/create-opportunity-contact";
 
@@ -15,7 +15,8 @@ const input = {
   anioVehiculo: 2022,
   matriculaVehiculo: "SBA1234",
 };
-const ctx = { accountId: "acc_ml", correlationId: "c1" };
+const ctx = { accountId: "acc_ml", correlationId: "c1" }; //                       sin header → Capa 2 (CRM)
+const ctxH = { accountId: "acc_ml", correlationId: "c1", idempotencyKey: "idem-908812" }; // con header → Capa 1
 function deps() {
   return { opportunities: new InMemoryOpportunitiesRepository(), crm: new MockCrmClient(), connection };
 }
@@ -28,60 +29,66 @@ class FlakyCrm implements CrmClient {
   async findContactByCedula() {
     return this.contactId ? { id: this.contactId } : null;
   }
-  async findDealByExternalId() {
-    return null;
-  }
-  async createContact() {
+  async createContact(): Promise<CrmWriteResult> {
     this.contactCreated += 1;
     this.contactId = "C1";
-    return { id: "C1" };
+    return { id: "C1", duplicate: false };
   }
-  async createOpportunity() {
+  async createOpportunity(): Promise<CrmWriteResult> {
     this.oppAttempts += 1;
     if (this.oppAttempts === 1) throw new Error("CRM 503 transitorio");
-    return { id: "D1" };
+    return { id: "D1", duplicate: false };
   }
 }
 
-describe("createOpportunityContact (idempotencia por NroSolicitud, dedup por cédula)", () => {
+describe("Capa 2 — sin X-Idempotency-Key (dedup en el CRM por EXTERNAL_ID / cédula)", () => {
   it("crea Contacto + Oportunidad la primera vez", async () => {
     const out = await createOpportunityContact(input, ctx, deps());
     expect(out.status).toBe("created");
   });
 
-  it("mismo NroSolicitud + mismo payload → duplicate (no re-crea)", async () => {
+  it("mismo NroSolicitud → duplicate (Zoho dedupea por EXTERNAL_ID)", async () => {
     const d = deps();
     await createOpportunityContact(input, ctx, d);
     const second = await createOpportunityContact(input, ctx, d);
     expect(second.status).toBe("duplicate");
   });
 
-  it("mismo NroSolicitud + payload distinto → conflict (409)", async () => {
-    const d = deps();
-    await createOpportunityContact(input, ctx, d);
-    const other = await createOpportunityContact({ ...input, marcaVehiculo: "Fiat" }, ctx, d);
-    expect(other.status).toBe("conflict");
-  });
-
-  it("reutiliza el Contacto por cédula (misma cédula, distinto NroSolicitud → 2da Oportunidad)", async () => {
+  it("reutiliza el Contacto por cédula (distinto NroSolicitud → 2da Oportunidad creada)", async () => {
     const d = deps();
     const first = await createOpportunityContact(input, ctx, d);
     const second = await createOpportunityContact({ ...input, nroSolicitud: 908813 }, ctx, d);
     expect(first.status).toBe("created");
     expect(second.status).toBe("created");
-    if (second.status === "created") {
-      expect(second.reusedContact).toBe(true);
-    }
+    if (second.status === "created") expect(second.reusedContact).toBe(true);
+  });
+});
+
+describe("Capa 1 — con X-Idempotency-Key (dedup en Catalyst, antes del CRM)", () => {
+  it("mismo key + mismo payload → duplicate (corta sin tocar el CRM)", async () => {
+    const d = deps();
+    await createOpportunityContact(input, ctxH, d);
+    const second = await createOpportunityContact(input, ctxH, d);
+    expect(second.status).toBe("duplicate");
   });
 
-  it("mismo NroSolicitud en otra Cuenta sí crea (idempotencia por tenant)", async () => {
+  it("mismo key + payload distinto → conflict (409)", async () => {
     const d = deps();
-    await createOpportunityContact(input, ctx, d);
-    const otherAccount = await createOpportunityContact(input, { accountId: "acc_otra", correlationId: "c2" }, d);
+    await createOpportunityContact(input, ctxH, d);
+    const other = await createOpportunityContact({ ...input, marcaVehiculo: "Fiat" }, ctxH, d);
+    expect(other.status).toBe("conflict");
+  });
+
+  it("mismo key en otra Cuenta sí crea (idempotencia por tenant)", async () => {
+    const d = deps();
+    await createOpportunityContact(input, ctxH, d);
+    const otherAccount = await createOpportunityContact(input, { ...ctxH, accountId: "acc_otra" }, d);
     expect(otherAccount.status).toBe("created");
   });
+});
 
-  it("error transitorio en la Oportunidad es REINTENTABLE y reusa el Contacto (no huérfano)", async () => {
+describe("Recuperación de error transitorio", () => {
+  it("error en la Oportunidad es reintentable y reusa el Contacto (no huérfano)", async () => {
     const crm = new FlakyCrm();
     const d = { opportunities: new InMemoryOpportunitiesRepository(), crm, connection };
     const first = await createOpportunityContact(input, ctx, d);

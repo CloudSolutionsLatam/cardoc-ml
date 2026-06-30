@@ -50,7 +50,7 @@ describe("ZohoCrmClient.createContact", () => {
   it("postea a Contacts con los api_names reales y devuelve el id", async () => {
     const { fetchFn, calls } = fake(() => json({ data: [{ code: "SUCCESS", details: { id: "C9" } }] }, 201));
     const out = await new ZohoCrmClient({ fetchFn }).createContact(data, conn);
-    expect(out).toEqual({ id: "C9" });
+    expect(out).toEqual({ id: "C9", duplicate: false });
     expect(calls[0]?.url).toBe("https://www.zohoapis.com/crm/v2/Contacts");
     const rec = bodyOf(calls[0]!).data[0]!;
     expect(rec["Last_Name"]).toBe("Pérez");
@@ -78,18 +78,28 @@ describe("ZohoCrmClient.createContact", () => {
   });
 });
 
-describe("ZohoCrmClient.findDealByExternalId", () => {
-  it("busca Deals por EXTERNAL_ID y devuelve el id", async () => {
-    const { fetchFn, calls } = fake(() => json({ data: [{ id: "D5" }] }));
-    const out = await new ZohoCrmClient({ fetchFn }).findDealByExternalId(908812, conn);
-    expect(out).toEqual({ id: "D5" });
-    expect(decodeURIComponent(calls[0]!.url)).toContain("/crm/v2/Deals/search");
-    expect(decodeURIComponent(calls[0]!.url)).toContain("(EXTERNAL_ID:equals:908812)");
-  });
-
-  it("204 → null", async () => {
-    const { fetchFn } = fake(() => new Response(null, { status: 204 }));
-    expect(await new ZohoCrmClient({ fetchFn }).findDealByExternalId(1, conn)).toBeNull();
+describe("ZohoCrmClient.createOpportunity — dedup de la base (DUPLICATE_DATA)", () => {
+  it("EXTERNAL_ID ya existe → devuelve el id del duplicado con duplicate:true (no lanza)", async () => {
+    const { fetchFn } = fake(() =>
+      json(
+        {
+          data: [
+            {
+              code: "DUPLICATE_DATA",
+              status: "error",
+              duplicate_record: { id: "D-EXIST" },
+              details: { api_name: "EXTERNAL_ID" },
+            },
+          ],
+        },
+        202,
+      ),
+    );
+    const out = await new ZohoCrmClient({ fetchFn }).createOpportunity(
+      { nroSolicitud: 908812, contactId: "C9", stage: "Nueva Solicitud" },
+      conn,
+    );
+    expect(out).toEqual({ id: "D-EXIST", duplicate: true });
   });
 });
 
@@ -109,7 +119,7 @@ describe("ZohoCrmClient.createOpportunity", () => {
       },
       conn,
     );
-    expect(out).toEqual({ id: "D7" });
+    expect(out).toEqual({ id: "D7", duplicate: false });
     expect(calls[0]?.url).toBe("https://www.zohoapis.com/crm/v2/Deals");
     const rec = bodyOf(calls[0]!).data[0]!;
     expect(rec["Pipeline"]).toBe("B2B");

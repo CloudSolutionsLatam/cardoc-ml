@@ -90,13 +90,18 @@ export interface CrmOpportunityData {
   tenant?: string;
 }
 
+/** Resultado de un create en el CRM: id del registro + si ya existía (dedup del propio CRM). */
+export interface CrmWriteResult {
+  id: string;
+  /** true si el registro ya existía y Zoho lo dedupeó (`DUPLICATE_DATA` por campo único). */
+  duplicate: boolean;
+}
+
 export interface CrmClient {
   /** Dedup: busca Contacto por cédula. Null si no existe. */
   findContactByCedula(nroCedula: number, conn: CrmConnection): Promise<{ id: string } | null>;
-  /** Idempotencia del Deal: busca Oportunidad por External ID (`NroSolicitud`). Null si no existe. */
-  findDealByExternalId(nroSolicitud: number, conn: CrmConnection): Promise<{ id: string } | null>;
-  createContact(data: CrmContactData, conn: CrmConnection): Promise<{ id: string }>;
-  createOpportunity(data: CrmOpportunityData, conn: CrmConnection): Promise<{ id: string }>;
+  createContact(data: CrmContactData, conn: CrmConnection): Promise<CrmWriteResult>;
+  createOpportunity(data: CrmOpportunityData, conn: CrmConnection): Promise<CrmWriteResult>;
 }
 
 /**
@@ -113,23 +118,23 @@ export class MockCrmClient implements CrmClient {
     return id ? { id } : null;
   }
 
-  async findDealByExternalId(nroSolicitud: number, _conn: CrmConnection): Promise<{ id: string } | null> {
-    const id = this.dealsByExternalId.get(nroSolicitud);
-    return id ? { id } : null;
-  }
-
-  async createContact(data: CrmContactData, _conn: CrmConnection): Promise<{ id: string }> {
+  async createContact(data: CrmContactData, _conn: CrmConnection): Promise<CrmWriteResult> {
+    const existing = this.contactsByCedula.get(data.nroCedula);
+    if (existing) return { id: existing, duplicate: true };
     this.seq += 1;
     const id = `mock-contact-${this.seq}`;
     this.contactsByCedula.set(data.nroCedula, id);
-    return { id };
+    return { id, duplicate: false };
   }
 
-  async createOpportunity(data: CrmOpportunityData, _conn: CrmConnection): Promise<{ id: string }> {
+  async createOpportunity(data: CrmOpportunityData, _conn: CrmConnection): Promise<CrmWriteResult> {
+    // Dedup por EXTERNAL_ID (simula el DUPLICATE_DATA de Zoho con campo único).
+    const existing = this.dealsByExternalId.get(data.nroSolicitud);
+    if (existing) return { id: existing, duplicate: true };
     this.seq += 1;
     const id = `mock-opp-${this.seq}`;
     this.dealsByExternalId.set(data.nroSolicitud, id);
-    return { id };
+    return { id, duplicate: false };
   }
 }
 
@@ -140,7 +145,13 @@ type FetchResponse = Awaited<ReturnType<FetchFn>>;
 
 /** Respuesta de los endpoints de escritura (`POST /crm/v2/<Module>`). */
 interface ZohoWriteResponse {
-  data?: Array<{ code?: string; message?: string; details?: { id?: string } }>;
+  data?: Array<{
+    code?: string;
+    message?: string;
+    details?: { id?: string };
+    /** En `DUPLICATE_DATA`, el registro existente que disparó el duplicado. */
+    duplicate_record?: { id?: string };
+  }>;
 }
 /** Respuesta del endpoint de búsqueda (`GET /crm/v2/<Module>/search`). */
 interface ZohoSearchResponse {
@@ -189,13 +200,7 @@ export class ZohoCrmClient implements CrmClient {
     return id ? { id } : null;
   }
 
-  async findDealByExternalId(nroSolicitud: number, conn: CrmConnection): Promise<{ id: string } | null> {
-    const { deal, modules } = ZOHO_CRM_FIELDS;
-    const id = await this.searchFirstId(modules.deals, `(${deal.externalId}:equals:${nroSolicitud})`, conn);
-    return id ? { id } : null;
-  }
-
-  async createContact(data: CrmContactData, conn: CrmConnection): Promise<{ id: string }> {
+  async createContact(data: CrmContactData, conn: CrmConnection): Promise<CrmWriteResult> {
     const f = ZOHO_CRM_FIELDS.contact;
     const record: Record<string, unknown> = {
       [f.lastName]: data.apellidos,
@@ -207,7 +212,7 @@ export class ZohoCrmClient implements CrmClient {
     return this.createRecord(ZOHO_CRM_FIELDS.modules.contacts, record, conn);
   }
 
-  async createOpportunity(data: CrmOpportunityData, conn: CrmConnection): Promise<{ id: string }> {
+  async createOpportunity(data: CrmOpportunityData, conn: CrmConnection): Promise<CrmWriteResult> {
     const f = ZOHO_CRM_FIELDS.deal;
     const record: Record<string, unknown> = {
       [f.name]: `ML ${data.nroSolicitud}`,
@@ -236,21 +241,26 @@ export class ZohoCrmClient implements CrmClient {
     module: string,
     record: Record<string, unknown>,
     conn: CrmConnection,
-  ): Promise<{ id: string }> {
+  ): Promise<CrmWriteResult> {
     const res = await this.request(
       `${crmBase(conn)}/${module}`,
       { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ data: [record] }) },
       conn,
     );
-    // Zoho rechaza por-registro tanto en 2xx (code != SUCCESS) como en 400 ({data:[{code,message}]});
-    // parseamos el body (tolerando no-JSON) para surfacear la causa real, no solo el HTTP status.
+    // Zoho responde por-registro; parseamos el body (tolerando no-JSON) para leer el code real.
     const json = await parseCrmJson<ZohoWriteResponse>(res).catch(() => undefined);
     const row = json?.data?.[0];
+    // Idempotencia de la BASE: si el campo único (EXTERNAL_ID) ya existe, Zoho responde
+    // DUPLICATE_DATA con el registro existente → lo tratamos como "ya existía" (no error).
+    const dupId = row?.duplicate_record?.id ?? row?.details?.id;
+    if (row?.code === "DUPLICATE_DATA" && dupId) {
+      return { id: String(dupId), duplicate: true };
+    }
     if (!res.ok || row?.code !== "SUCCESS" || !row?.details?.id) {
       const reason = row?.code ? `${row.code}${row.message ? `: ${row.message}` : ""}` : `HTTP ${res.status}`;
       throw new UpstreamError("crm", res.status, `${module} create rechazado (${reason})`);
     }
-    return { id: String(row.details.id) };
+    return { id: String(row.details.id), duplicate: false };
   }
 
   private async request(

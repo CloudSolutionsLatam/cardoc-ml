@@ -33,19 +33,32 @@ r = await fetch(`${base}/v1/opportunity-contact`, { method: "POST", headers: JSO
 j = await r.json();
 check("POST sin NroSolicitud → 400 VALIDATION_ERROR", r.status === 400 && j?.error?.code === "VALIDATION_ERROR", `got ${r.status}`);
 
-r = await fetch(`${base}/v1/opportunity-contact`, { method: "POST", headers: JSONH, body: JSON.stringify(body) });
+const IDEM = { ...JSONH, "X-Idempotency-Key": "smoke-908812" }; // header opcional → activa Capa 1 (Catalyst)
+
+// Capa 1 (con X-Idempotency-Key): created → duplicate → conflict
+r = await fetch(`${base}/v1/opportunity-contact`, { method: "POST", headers: IDEM, body: JSON.stringify(body) });
 j = await r.json();
-check("POST opportunity-contact → 201 created", r.status === 201 && j.status === "created", `got ${r.status} ${JSON.stringify(j)}`);
+check("POST (con idem-key) → 201 created", r.status === 201 && j.status === "created", `got ${r.status} ${JSON.stringify(j)}`);
 check("  stage = 'Nueva Solicitud' (server-side)", j?.opportunity?.stage === "Nueva Solicitud");
 check("  X-Correlation-Id presente", Boolean(r.headers.get("x-correlation-id")));
 
-r = await fetch(`${base}/v1/opportunity-contact`, { method: "POST", headers: JSONH, body: JSON.stringify(body) });
+r = await fetch(`${base}/v1/opportunity-contact`, { method: "POST", headers: IDEM, body: JSON.stringify(body) });
 j = await r.json();
-check("POST repetido mismo NroSolicitud → 200 duplicate", r.status === 200 && j.status === "duplicate", `got ${r.status}`);
+check("POST repetido misma idem-key → 200 duplicate (Capa 1)", r.status === 200 && j.status === "duplicate", `got ${r.status}`);
 
-r = await fetch(`${base}/v1/opportunity-contact`, { method: "POST", headers: JSONH, body: JSON.stringify({ ...body, MarcaVehiculo: "Fiat" }) });
+r = await fetch(`${base}/v1/opportunity-contact`, { method: "POST", headers: IDEM, body: JSON.stringify({ ...body, MarcaVehiculo: "Fiat" }) });
 j = await r.json();
-check("POST mismo NroSolicitud + payload distinto → 409", r.status === 409 && j?.error?.code === "IDEMPOTENCY_CONFLICT", `got ${r.status}`);
+check("POST misma idem-key + payload distinto → 409 (Capa 1)", r.status === 409 && j?.error?.code === "IDEMPOTENCY_CONFLICT", `got ${r.status}`);
+
+// Capa 2 (sin header): dedup en el CRM por EXTERNAL_ID
+const body2 = { ...body, NroSolicitud: 908899 };
+r = await fetch(`${base}/v1/opportunity-contact`, { method: "POST", headers: JSONH, body: JSON.stringify(body2) });
+j = await r.json();
+check("POST sin header (NroSolicitud nuevo) → 201 created (Capa 2)", r.status === 201 && j.status === "created", `got ${r.status}`);
+
+r = await fetch(`${base}/v1/opportunity-contact`, { method: "POST", headers: JSONH, body: JSON.stringify(body2) });
+j = await r.json();
+check("POST repetido sin header → 200 duplicate (Capa 2, dedup CRM)", r.status === 200 && j.status === "duplicate", `got ${r.status}`);
 
 r = await fetch(`${base}/v1/informes`, { headers: AUTH });
 j = await r.json();

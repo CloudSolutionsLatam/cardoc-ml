@@ -21,7 +21,7 @@ Convención: si una ADR crece o necesita discusión extensa, se separa a su prop
 | ADR | Decisión | Estado |
 |-----|----------|--------|
 | [0001](#adr-0001) | Catalyst como gateway de control delante de Zoho | Aceptada |
-| [0002](#adr-0002) | Idempotencia = External ID de la agenda (`NroSolicitud`) tomado del body | Aceptada |
+| [0002](#adr-0002) | Idempotencia en 2 capas: `X-Idempotency-Key` opcional (Catalyst) + `EXTERNAL_ID`=NroSolicitud único (CRM) | Aceptada (revisado) |
 | [0003](#adr-0003) | Dedup de Contacto por `NroCedula` (campo Cedula custom en Contacts) | Aceptada |
 | [0004](#adr-0004) | Auth a Zoho CRM vía Catalyst Connection (OAuth gestionado) | Aceptada |
 | [0005](#adr-0005) | Cross-tenant → 404 (no 403) | Aceptada |
@@ -48,11 +48,22 @@ Convención: si una ADR crece o necesita discusión extensa, se separa a su prop
 - **Descartado:** CRM/Creator como única capa, sin gateway.
 
 ## ADR-0002
-**Idempotencia = `NroSolicitud` (del body).** `UNIQUE(account_id, nroSolicitud)` → un
-reintento no crea dos Oportunidades.
-- **Estado:** Aceptada — **implementado** (revisa la idea previa del header `X-Idempotency-Key`).
-- **Contexto:** ML manda la solicitud AutoCheck con su `NroSolicitud` (único en su sistema, confirmado por mail); es el ancla de no-duplicación. No hay header de idempotencia.
-- **Consecuencia:** `idempotencyKey = String(NroSolicitud)`; el `payload_fingerprint` detecta "mismo NroSolicitud, payload distinto" → 409. Se persiste en el campo **External ID** del Deal (API `EXTERNAL_ID`, creado en CRM — Nestor 2026-06-30). Ver `packages/application/src/create-opportunity-contact.ts`.
+**Idempotencia en DOS capas** (defensa en profundidad). El POST no crea dos Oportunidades vía dos
+mecanismos complementarios, porque cardoc es un middleware entre sistemas externos (ML) y la base
+real (Zoho CRM).
+- **Estado:** Aceptada — **implementado** (revisa la idea previa de un único header obligatorio / único anclaje en el body).
+- **Contexto:** ML manda `NroSolicitud` (único) en el body y, **opcionalmente**, un header `X-Idempotency-Key`.
+- **Consecuencia:**
+  - **Capa 1 — middleware (Catalyst):** SOLO si llega `X-Idempotency-Key`. Row en `crm_opportunities`
+    (`UNIQUE(account_id, idempotency_key)` + `payload_fingerprint`), consultado **antes** de tocar Zoho
+    → replay → `200 duplicate`; misma clave + payload distinto → `409`. Fast-path que evita el roundtrip al CRM.
+  - **Capa 2 — base (Zoho CRM):** SIEMPRE. `EXTERNAL_ID` = `NroSolicitud` es **único** en Deals; al recrear,
+    Zoho responde `DUPLICATE_DATA` con el id existente → el adapter lo devuelve como `duplicate` (no error).
+    Dedup del Contacto por cédula. Es la verdad durable.
+  - Sin header, la Capa 1 se omite y la Capa 2 es la única autoridad (sin detección de payload-distinto →
+    eso es exclusivo de la Capa 1). Ver `create-opportunity-contact.ts` + `providers/src/crm-client.ts`.
+- **Descartado:** un `X-Idempotency-Key` **obligatorio** (ML no siempre lo manda) y depender **solo** del
+  middleware (se perdería la dedup si el DataStore se resetea — por eso la Capa 2 en el CRM).
 - **Descartado:** header `X-Idempotency-Key` (ML ancla en `NroSolicitud`, que viaja en el body).
 
 ## ADR-0003

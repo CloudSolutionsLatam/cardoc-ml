@@ -37,6 +37,7 @@ Documentos relacionados: [README](README.md) · [ARQUITECTURA](ARQUITECTURA.md) 
 | Header | Dirección | Obligatorio | Semántica |
 |---|---|---|---|
 | `X-Api-Key: <token>` | request | Sí (excepto `/v1/health`) | Token opaco. Se compara solo por **hash** (`hashToken`, `auth.ts`); el token plano nunca se persiste ni se loguea. |
+| `X-Idempotency-Key` | request (opcional) | No | **Solo** en `POST /v1/opportunity-contact`. Si viene, activa la idempotencia de **Capa 1** (DataStore de Catalyst): replay → `200 duplicate`, misma clave + payload distinto → `409`. Sin él, deduplica el CRM (Capa 2). Ver §8. |
 | `X-Correlation-Id` | request (opcional) / response (siempre) | No | Si llega y es UUID válido se propaga; si no, se regenera (`correlationMiddleware`). Siempre vuelve en la respuesta y aparece en el sobre de error y en `audit_log`. |
 | `X-Cap-Window` / `X-Cap-Limit` / `X-Cap-Remaining` | response | — | Estado del cap más ajustado de las 3 ventanas (`cap.ts`). Ver §7. |
 | `Retry-After` | response (solo 429) | — | Segundos hasta el reset de la ventana excedida (`cap.ts`). |
@@ -82,14 +83,14 @@ Scopes existentes (`packages/domain/src/types.ts`): `opportunities:create`, `rep
 ## 2. `POST /v1/opportunity-contact`
 
 Crea o reutiliza un Contacto (dedup por **cédula**, `NroCedula`) y crea una Oportunidad con
-estado fijo `Nueva Solicitud`. Idempotente por `NroSolicitud` (del body). Es el payload
-que manda **ML/AutoCheck**.
+estado fijo `Nueva Solicitud`. **Idempotente en 2 capas** (header `X-Idempotency-Key` opcional →
+Catalyst; siempre → CRM por `EXTERNAL_ID`; ver §8). Es el payload que manda **ML/AutoCheck**.
 
 | | |
 |---|---|
 | **Método / path** | `POST /v1/opportunity-contact` |
 | **Scope requerido** | `opportunities:create` |
-| **Headers** | `X-Api-Key: …` (oblig.) · `Content-Type: application/json` · `X-Correlation-Id` (opc.) |
+| **Headers** | `X-Api-Key: …` (oblig.) · `Content-Type: application/json` · `X-Idempotency-Key` (opc., activa Capa 1) · `X-Correlation-Id` (opc.) |
 | **Cap (endpoint lógico)** | `opportunity-contact` |
 | **Handler** | `routes/opportunity-contact.ts` · use-case `createOpportunityContact` |
 
@@ -173,7 +174,7 @@ El handler traduce el `outcome` del use-case a HTTP. La semántica de idempotenc
 | 400 | `VALIDATION_ERROR` | Body inválido / falta un campo requerido / clave extra (`details.fields`). |
 | 401 | `UNAUTHENTICATED` | Sin X-Api-Key o token inválido/revocado/vencido. |
 | 403 | `FORBIDDEN_SCOPE` | El token no tiene `opportunities:create` (`details.required`). |
-| 409 | `IDEMPOTENCY_CONFLICT` | Mismo `NroSolicitud` con payload distinto (`details.nroSolicitud`). Ver §8. |
+| 409 | `IDEMPOTENCY_CONFLICT` | Mismo `X-Idempotency-Key` con payload distinto (Capa 1; sin header no aplica). Ver §8. |
 | 429 | `CAP_EXCEEDED` | Cap del endpoint excedido. `Retry-After` + `details.{window,limit,retryAfterSeconds}`. |
 | 502 | `UPSTREAM_ERROR` | Falla creando en CRM (`details.upstream = "crm"`). El row queda en `status=error`. |
 | 500 | `INTERNAL_ERROR` | Container/cuenta no resueltos u otro fallo no clasificado. |
@@ -183,6 +184,7 @@ El handler traduce el `outcome` del use-case a HTTP. La semántica de idempotenc
 ```bash
 curl -i -X POST http://localhost:3030/v1/opportunity-contact \
   -H "X-Api-Key: test-token" \
+  -H "X-Idempotency-Key: order-2026-06-25-0001" \
   -H "X-Correlation-Id: f47ac10b-58cc-4372-a567-0e02b2c3d479" \
   -H "Content-Type: application/json" \
   -d '{
@@ -192,8 +194,9 @@ curl -i -X POST http://localhost:3030/v1/opportunity-contact \
   }'
 ```
 
-Reintento exacto (mismo `NroSolicitud` + mismo body) → `200` con `status: "duplicate"`.
-Mismo `NroSolicitud` con body distinto → `409 IDEMPOTENCY_CONFLICT`.
+`X-Idempotency-Key` es **opcional** (activa la Capa 1). Con él: reintento exacto → `200 duplicate`;
+misma clave + body distinto → `409 IDEMPOTENCY_CONFLICT`. **Sin** el header deduplica el CRM
+(Capa 2 por `EXTERNAL_ID`): el repetido → `200 duplicate` (sin detección de body-distinto). Ver §8.
 
 ---
 
@@ -415,7 +418,7 @@ registre; y loguea **solo** `correlationId + método + path + code` (nunca paylo
 | 403 | `FORBIDDEN_SCOPE` | Token sin el scope requerido (`requireScope`, `auth.ts`). `details.required`. **Único** caso de 403. |
 | 404 | `NOT_FOUND` | Recurso inexistente o **de otra Cuenta** (`ReportNotFoundError` → `errors.ts`). Cross-tenant = 404 por decisión (§9). |
 | 404 | `PDF_NOT_AVAILABLE` | Informe existe pero sin PDF disponible/generable (`PdfNotAvailableError`). `details.informeId`. |
-| 409 | `IDEMPOTENCY_CONFLICT` | Mismo `NroSolicitud`, payload distinto (POST). `details.nroSolicitud`. |
+| 409 | `IDEMPOTENCY_CONFLICT` | Mismo `X-Idempotency-Key`, payload distinto (POST, Capa 1). |
 | 422 | `UNPROCESSABLE` | Query de `GET /v1/informes` fuera de la allowlist o tipo inválido (`.strict()`). `details.fields`. |
 | 429 | `CAP_EXCEEDED` | Cap de endpoint excedido (`cap.ts`). `details.{window,limit,retryAfterSeconds}` + headers `Retry-After`/`X-Cap-*`. |
 | 502 | `UPSTREAM_ERROR` | Falla de CRM/Creator/WorkDrive (`UpstreamError` o POST fallido). `details.upstream` = etiqueta **opaca** (`crm`\|`creator`\|`workdrive`). |
@@ -484,37 +487,40 @@ con `details.{window, limit, retryAfterSeconds}`.
 
 ## 8. Semántica de idempotencia (`POST /v1/opportunity-contact`)
 
-La **clave de idempotencia es `NroSolicitud`** (del body; único en ML). Unicidad física:
-`UNIQUE(account_id, idempotency_key)` en `crm_opportunities`, con `idempotency_key = String(NroSolicitud)`.
-Se persiste también `payload_fingerprint` (SHA-256 canónico del body, `payloadFingerprint`)
-para detectar “mismo NroSolicitud, payload distinto” (estilo Stripe). **No hay header de idempotencia.**
+Idempotencia en **dos capas** complementarias (ADR-0002). cardoc es un middleware entre ML y la
+base real (Zoho CRM); cada capa deduplica con su propia clave.
 
-### 8.1 Flujo (`create-opportunity-contact.ts`)
+### 8.1 Capa 1 — middleware (Catalyst), **opcional** (header `X-Idempotency-Key`)
 
-1. Se calcula `fingerprint` del payload y se **siembra** un row `pending` con
-   `insertIfAbsent(seed)` (clave `accountId + idempotencyKey`), **antes** de tocar CRM.
-2. **Si se creó el row** (somos el creador) → efecto externo: `findContactByCedula` (dedup por
-   cédula) → `createContact` si no existía → `createOpportunity` (stage fijo) → `markCreated`.
-   Resultado **`201` `created`**. Si CRM falla → `markError` y **`502` `UPSTREAM_ERROR`**.
-3. **Si NO se creó** (la clave ya existía), según el row encontrado:
+Si el request trae `X-Idempotency-Key`, se persiste un row en `crm_opportunities`
+(`UNIQUE(account_id, idempotency_key)` + `payload_fingerprint`) y se consulta **antes** de tocar
+Zoho — fast-path que evita el roundtrip al CRM en los duplicados (`create-opportunity-contact.ts`):
 
-| Estado del row encontrado | `outcome` | HTTP |
+1. Se siembra un row `pending` con `insertIfAbsent` (clave `accountId + X-Idempotency-Key`).
+2. **Si se creó** (somos el creador) → efecto externo (Capa 2) → `markCreated` → **`201 created`**.
+3. **Si ya existía**, según el row:
+
+| Estado del row | `outcome` | HTTP |
 |---|---|---|
-| `payload_fingerprint` ≠ fingerprint del request | `conflict` | **409 `IDEMPOTENCY_CONFLICT`** |
-| `status = created` (mismo payload) | `duplicate` | **200 OK** (replay) |
-| `status = pending` (otro flujo en curso) | `in_progress` | **202 Accepted** |
-| `status = error` (intento previo falló) | `error` | **502 `UPSTREAM_ERROR`** |
+| `payload_fingerprint` ≠ del request | `conflict` | **409 `IDEMPOTENCY_CONFLICT`** |
+| `status = created` | `duplicate` | **200 OK** (replay, sin tocar el CRM) |
+| `status = pending` | `in_progress` | **202 Accepted** |
+| `status = error` | reintenta el efecto (idempotente) | según resultado |
 
-> Resumen de status HTTP de idempotencia: **201** (creado) · **200** (replay exacto) · **202**
-> (en curso) · **409** (mismo NroSolicitud, payload distinto) · **502** (intento previo en error /
-> fallo de CRM en este intento). Los 201/200/409 son los casos rectores; el 202 y el 502-por-error
-> previo son los estados intermedios reales del use-case.
+### 8.2 Capa 2 — base (Zoho CRM), **siempre**
 
-### 8.2 Garantía
+Sin `X-Idempotency-Key` (y como red de fondo del creador en Capa 1), la dedup la hace el CRM dentro
+del propio efecto:
+- **Contacto:** `findContactByCedula` antes de crear (reusa si existe).
+- **Oportunidad:** `EXTERNAL_ID` = `NroSolicitud` es **único** en Deals; al recrear, Zoho responde
+  `DUPLICATE_DATA` con el id existente → el adapter lo devuelve como **`200 duplicate`** (no error).
 
-La Oportunidad **no se duplica**: solo el creador del row ejecuta el efecto externo; los demás
-reintentos con el mismo `NroSolicitud` hacen replay/short-circuit. La dedup del Contacto es por
-**cédula** (`NroCedula`) dentro del propio efecto.
+Sin header **no hay detección de payload-distinto** (no se guarda fingerprint): un repetido con
+otro payload devuelve `duplicate`, no `409`. El `409` es una garantía **exclusiva de la Capa 1**.
+
+> Status HTTP: **201** (creado) · **200** (duplicate, por cualquiera de las dos capas) · **202**
+> (en curso, Capa 1) · **409** (mismo `X-Idempotency-Key` + payload distinto, Capa 1) · **502**
+> (fallo de CRM).
 
 ---
 

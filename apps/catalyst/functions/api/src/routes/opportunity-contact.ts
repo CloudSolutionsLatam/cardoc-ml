@@ -26,9 +26,13 @@ export const opportunityContactHandler: RequestHandler = asyncHandler<AuthedRequ
 
   const correlationId = req.correlationId ?? "";
   const nroSolicitud = parsed.data.nroSolicitud;
+  // Header OPCIONAL: si viene, activa la idempotencia de Capa 1 (DataStore de Catalyst).
+  // Sin él, la dedup la hace el CRM (Capa 2, por EXTERNAL_ID/cédula). Ver ADR-0002.
+  const idemHeader = req.headers["x-idempotency-key"];
+  const idempotencyKey = typeof idemHeader === "string" && idemHeader.trim() !== "" ? idemHeader : undefined;
   const outcome = await createOpportunityContact(
     parsed.data,
-    { accountId, correlationId },
+    { accountId, correlationId, idempotencyKey },
     { opportunities: container.opportunities, crm: container.crm, connection: container.connection },
   );
 

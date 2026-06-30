@@ -64,8 +64,8 @@ Monorepo **pnpm workspaces** + TypeScript, ports & adapters (hexagonal).
   nunca del payload/query. Acceso cruzado → **404** (no 403).
 - **Secretos solo backend**: credenciales en Catalyst Environment Variables; el repo nunca
   los contiene (`.gitignore` + secret-scanning en CI).
-- **Idempotencia** (POST): `UNIQUE(account_id, NroSolicitud)`; mismo NroSolicitud + payload
-  distinto → `409 IDEMPOTENCY_CONFLICT`.
+- **Idempotencia** (POST): 2 capas — `X-Idempotency-Key` opcional (Catalyst: replay→`200`, payload
+  distinto→`409`) + `EXTERNAL_ID`=NroSolicitud único en el CRM (`DUPLICATE_DATA`). Ver ADR-0002.
 - **Cap** configurable hora/día/semana por consumidor+endpoint → `429 CAP_EXCEEDED`.
 - **Auditoría**: middleware on-finish escribe 1 registro por request (status + latencia +
   correlationId) en los 3 endpoints. Append-only.

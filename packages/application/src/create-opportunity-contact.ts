@@ -1,14 +1,16 @@
 /**
  * Use-case: crear/reutilizar Contacto + crear Oportunidad (POST /v1/opportunity-contact).
  *
- *   idempotency seed (por NroSolicitud) → (replay/conflict? corta) →
- *   findContactByCedula | createContact → createOpportunity(stage fijo) → markCreated
+ * Idempotencia en DOS capas (ver ADR-0002):
+ *  - **Capa 1 (middleware / Catalyst)** — SOLO si llega `X-Idempotency-Key` (`ctx.idempotencyKey`).
+ *    Se siembra/consulta un row en la DataStore **antes** de tocar Zoho → un duplicado corta
+ *    sin roundtrip al CRM (replay → `duplicate`; misma clave + payload distinto → `conflict`).
+ *  - **Capa 2 (base / Zoho CRM)** — SIEMPRE. Dedup del Contacto por cédula (`findContactByCedula`)
+ *    y de la Oportunidad por `EXTERNAL_ID` único: al recrear, Zoho responde `DUPLICATE_DATA` con
+ *    el id existente, que el adapter devuelve como `duplicate` (no como error).
  *
- * Garantía rectora: la Oportunidad NO se duplica. El row "pending" se siembra con
- * `(accountId, NroSolicitud)` (UNIQUE) ANTES de tocar CRM; solo el creador ejecuta el
- * efecto externo. Mismo NroSolicitud + payload distinto → conflicto.
- *
- * Dedup del Contacto: por **cédula** (ML no manda email).
+ * Sin header, la Capa 1 se omite y el CRM es la única autoridad de dedup (no hay detección de
+ * "mismo NroSolicitud + payload distinto" → eso es una garantía exclusiva de la Capa 1).
  */
 import {
   FIXED_OPPORTUNITY_STAGE,
@@ -22,6 +24,8 @@ export interface CreateOpportunityContext {
   /** Cuenta resuelta del token (la Cuenta "ML") — NUNCA del payload. */
   accountId: string;
   correlationId: string;
+  /** Valor del header `X-Idempotency-Key` (opcional). Si viene → activa la Capa 1 (DataStore). */
+  idempotencyKey?: string;
 }
 
 export interface CreateOpportunityDeps {
@@ -38,17 +42,83 @@ export type CreateOpportunityOutcome =
   | { status: "conflict" }
   | { status: "error"; message: string };
 
+interface EffectResult {
+  contactId: string;
+  opportunityId: string;
+  reusedContact: boolean;
+  /** true si la Oportunidad ya existía en el CRM (Zoho `DUPLICATE_DATA` por `EXTERNAL_ID`). */
+  dealDuplicate: boolean;
+}
+
 export async function createOpportunityContact(
   input: OpportunityContactInput,
   ctx: CreateOpportunityContext,
   deps: CreateOpportunityDeps,
 ): Promise<CreateOpportunityOutcome> {
   const now = deps.now ?? (() => new Date().toISOString());
-  // El NroSolicitud (único en ML) es la clave de idempotencia / External ID.
-  const idempotencyKey = String(input.nroSolicitud);
-  const fingerprint = payloadFingerprint(input);
 
-  // 1) Sembrar el registro en estado "pending" de forma idempotente.
+  // Capa 2 — efecto en CRM, idempotente: Contacto por cédula, Oportunidad por EXTERNAL_ID.
+  const runEffect = async (): Promise<EffectResult> => {
+    const found = await deps.crm.findContactByCedula(input.nroCedula, deps.connection);
+    let contactId: string;
+    let reusedContact: boolean;
+    if (found) {
+      contactId = found.id;
+      reusedContact = true;
+    } else {
+      const c = await deps.crm.createContact(
+        {
+          nroCedula: input.nroCedula,
+          nombres: input.nombres,
+          apellidos: input.apellidos,
+          celular: input.celularCliente,
+          accountId: ctx.accountId,
+        },
+        deps.connection,
+      );
+      contactId = c.id;
+      reusedContact = c.duplicate; // si Zoho dedupeó el Contacto (cédula única) también es reuso
+    }
+    const opp = await deps.crm.createOpportunity(
+      {
+        nroSolicitud: input.nroSolicitud,
+        contactId,
+        stage: FIXED_OPPORTUNITY_STAGE,
+        marca: input.marcaVehiculo,
+        modelo: input.modeloVehiculo,
+        anio: input.anioVehiculo,
+        matricula: input.matriculaVehiculo,
+        sucursal: input.sucursal,
+        departamento: input.departamentoSucursal,
+        ciudad: input.ciudadSucursal,
+        direccion: input.direccionSucursal,
+        tenant: input.tenant,
+      },
+      deps.connection,
+    );
+    return { contactId, opportunityId: opp.id, reusedContact, dealDuplicate: opp.duplicate };
+  };
+
+  // ── Sin header → Capa 1 OFF: directo al CRM (dedup por EXTERNAL_ID / cédula) ──
+  if (!ctx.idempotencyKey) {
+    try {
+      const r = await runEffect();
+      return r.dealDuplicate
+        ? { status: "duplicate", contactId: r.contactId, opportunityId: r.opportunityId }
+        : {
+            status: "created",
+            contactId: r.contactId,
+            opportunityId: r.opportunityId,
+            reusedContact: r.reusedContact,
+          };
+    } catch (e) {
+      return { status: "error", message: e instanceof Error ? e.message : String(e) };
+    }
+  }
+
+  // ── Con header → Capa 1 ON: fast-path en la DataStore ANTES de tocar Zoho ──
+  const idempotencyKey = ctx.idempotencyKey;
+  const fingerprint = payloadFingerprint(input);
   const seed: OpportunityRecord = {
     accountId: ctx.accountId,
     idempotencyKey,
@@ -62,70 +132,27 @@ export async function createOpportunityContact(
   };
   const { row, created } = await deps.opportunities.insertIfAbsent(seed);
 
-  // 2) Si NO creamos el row, ese NroSolicitud ya fue tomado.
   if (!created) {
-    if (row.payloadFingerprint !== fingerprint) {
-      return { status: "conflict" };
-    }
+    if (row.payloadFingerprint !== fingerprint) return { status: "conflict" };
     if (row.status === "created") {
       return { status: "duplicate", contactId: row.contactId, opportunityId: row.opportunityId };
     }
-    if (row.status === "pending") {
-      return { status: "in_progress" };
-    }
-    // status === "error": un intento previo falló. El efecto externo es IDEMPOTENTE (dedup
-    // de Contacto por cédula + de Oportunidad por EXTERNAL_ID), así que un fallo transitorio
-    // (red/5xx) es reintentable: caemos al efecto en vez de quedar muertos para siempre.
+    if (row.status === "pending") return { status: "in_progress" };
+    // status === "error": un intento previo falló; el efecto es idempotente → reintentamos.
   }
 
-  // 3) Creador (row nuevo) o retry de "error" → efecto externo en CRM (idempotente).
-  const isRetry = !created;
   try {
-    const existing = await deps.crm.findContactByCedula(input.nroCedula, deps.connection);
-    const contact =
-      existing ??
-      (await deps.crm.createContact(
-        {
-          nroCedula: input.nroCedula,
-          nombres: input.nombres,
-          apellidos: input.apellidos,
-          celular: input.celularCliente,
-          accountId: ctx.accountId,
-        },
-        deps.connection,
-      ));
-    const reusedContact = existing !== null;
-
-    // En un retry, la Oportunidad pudo haberse creado en un intento previo que perdió la
-    // respuesta: buscarla por EXTERNAL_ID antes de crear evita duplicar el Deal.
-    const existingDeal = isRetry
-      ? await deps.crm.findDealByExternalId(input.nroSolicitud, deps.connection)
-      : null;
-    const opportunity =
-      existingDeal ??
-      (await deps.crm.createOpportunity(
-      {
-        nroSolicitud: input.nroSolicitud,
-        contactId: contact.id,
-        stage: FIXED_OPPORTUNITY_STAGE,
-        marca: input.marcaVehiculo,
-        modelo: input.modeloVehiculo,
-        anio: input.anioVehiculo,
-        matricula: input.matriculaVehiculo,
-        sucursal: input.sucursal,
-        departamento: input.departamentoSucursal,
-        ciudad: input.ciudadSucursal,
-        direccion: input.direccionSucursal,
-        tenant: input.tenant,
-      },
-        deps.connection,
-      ));
-
+    const r = await runEffect();
     await deps.opportunities.markCreated(ctx.accountId, idempotencyKey, {
-      contactId: contact.id,
-      opportunityId: opportunity.id,
+      contactId: r.contactId,
+      opportunityId: r.opportunityId,
     });
-    return { status: "created", contactId: contact.id, opportunityId: opportunity.id, reusedContact };
+    return {
+      status: "created",
+      contactId: r.contactId,
+      opportunityId: r.opportunityId,
+      reusedContact: r.reusedContact,
+    };
   } catch (e) {
     await deps.opportunities.markError(ctx.accountId, idempotencyKey);
     return { status: "error", message: e instanceof Error ? e.message : String(e) };
