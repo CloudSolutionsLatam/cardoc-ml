@@ -22,7 +22,7 @@ Convención: si una ADR crece o necesita discusión extensa, se separa a su prop
 |-----|----------|--------|
 | [0001](#adr-0001) | Catalyst como gateway de control delante de Zoho | Aceptada |
 | [0002](#adr-0002) | Idempotencia = External ID de la agenda (`NroSolicitud`) tomado del body | Aceptada |
-| [0003](#adr-0003) | Dedup de Contacto por Email | Aceptada |
+| [0003](#adr-0003) | Dedup de Contacto por `NroCedula` (campo Cedula custom en Contacts) | Aceptada |
 | [0004](#adr-0004) | Auth a Zoho CRM vía Catalyst Connection (OAuth gestionado) | Aceptada |
 | [0005](#adr-0005) | Cross-tenant → 404 (no 403) | Aceptada |
 | [0006](#adr-0006) | `accountId` siempre del token | Aceptada |
@@ -47,19 +47,19 @@ Convención: si una ADR crece o necesita discusión extensa, se separa a su prop
 - **Descartado:** CRM/Creator como única capa, sin gateway.
 
 ## ADR-0002
-**Idempotencia = External ID de la agenda (`NroSolicitud`) tomado del body.**
-`UNIQUE(account_id, external_id)` → un reintento no crea dos Oportunidades.
-- **Estado:** Aceptada (revisa la decisión previa de "header `X-Idempotency-Key` como clave").
-- **Contexto:** ML manda la solicitud AutoCheck con su `NroSolicitud`; ese número identifica la agenda y es el ancla de no-duplicación. El header `X-Idempotency-Key` puede coincidir, pero el **body es la fuente canónica**.
-- **Consecuencia:** el `external_id` se valida del body, es la clave del `UNIQUE`, y se persiste en un campo **External ID** del Deal (a crear en CRM). Ver `packages/application/src/create-opportunity-contact.ts`. **El scaffold E-01 todavía usa header-key — migrar en E-02.**
-- **Descartado:** el header como única clave (el consumidor real —ML— ancla en su `NroSolicitud`, que va en el body).
+**Idempotencia = `NroSolicitud` (del body).** `UNIQUE(account_id, nroSolicitud)` → un
+reintento no crea dos Oportunidades.
+- **Estado:** Aceptada — **implementado** (revisa la idea previa del header `X-Idempotency-Key`).
+- **Contexto:** ML manda la solicitud AutoCheck con su `NroSolicitud` (único en su sistema, confirmado por mail); es el ancla de no-duplicación. No hay header de idempotencia.
+- **Consecuencia:** `idempotencyKey = String(NroSolicitud)`; el `payload_fingerprint` detecta "mismo NroSolicitud, payload distinto" → 409. Se persiste como **External ID** del Deal (campo a crear en CRM). Ver `packages/application/src/create-opportunity-contact.ts`.
+- **Descartado:** header `X-Idempotency-Key` (ML ancla en `NroSolicitud`, que viaja en el body).
 
 ## ADR-0003
-**Dedup de Contacto por Email.**
-- **Estado:** Aceptada (revisa "Documento (CI/RUT)").
-- **Contexto:** el módulo `Contacts` del CRM **no tiene** un campo Documento/CI/RUT (verificado en el esquema, `discovery/modules/Contacts`). Además la notificación al cliente va por mail, así que el email es el identificador confiable.
-- **Consecuencia:** `findContactByDocument` pasa a buscar **por email** → reusar; si no, crear. Ver `packages/providers/src/crm-client.ts`.
-- **Descartado:** dedup por documento (no existe el campo) / por teléfono.
+**Dedup de Contacto por `NroCedula`.**
+- **Estado:** Aceptada — **implementado** (revisa "Email" y "Documento", ambos descartados).
+- **Contexto:** el payload de ML trae `NroCedula` pero **no trae email** (confirmado por mail); y el módulo `Contacts` no tiene campo documento. La cédula es la identidad estable que sí llega.
+- **Consecuencia:** `findContactByCedula` antes de crear; si existe, se reutiliza. Requiere un **campo custom `Cedula`** en Contacts (tarea CRM). Ver `packages/providers/src/crm-client.ts`.
+- **Descartado:** email (ML no lo manda) / teléfono.
 
 ## ADR-0004
 **Auth a Zoho CRM = Catalyst Connection** (OAuth gestionado por la plataforma).
