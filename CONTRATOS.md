@@ -538,6 +538,6 @@ Estos puntos están abiertos; los campos PLACEHOLDER del contrato dependen de el
   para los `curl` de esta guía.
 
 > Estado E-06: la API, el sobre de error, los códigos, la idempotencia y los headers de cap están
-> **implementados y verdes** (`tsc -b`, 7 tests vitest, eslint, smoke e2e 16/16). Los adapters reales
-> de CRM/Creator son **stubs** (`NotImplementedError`) — los contratos de `data` se confirman al
+> **implementados y verdes** (`tsc -b`, 24 tests vitest, eslint, smoke e2e). El adapter de **CRM
+> (`ZohoCrmClient`) está implementado** (E-02); el de Creator sigue **stub** (`NotImplementedError`) — los contratos de `data` se confirman al
 > cerrar las open questions. Ver [PLAN-DE-DESARROLLO](PLAN-DE-DESARROLLO.md).

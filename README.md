@@ -16,8 +16,8 @@ API en **Zoho Catalyst** (Advanced I/O) para automotoras. Tres endpoints `/v1`:
 
 > **Estado: E-01 completo y deployable.** Verde verificado: `tsc -b`, 7 tests (vitest),
 > `eslint`, smoke e2e 16/16 y bundle esbuild. El thin-slice del POST corre end-to-end
-> contra el path in-memory + Mock CRM. Los adapters reales (Zoho CRM / Creator / WorkDrive)
-> y el DataStore entran en E-02/E-03.
+> contra el path in-memory + Mock CRM. El adapter **CRM (`ZohoCrmClient`) ya está implementado**
+> (E-02); Creator/WorkDrive y el DataStore productivo entran en E-03.
 >
 > ```bash
 > pnpm install && pnpm -r run typecheck && pnpm -r run test && pnpm run lint

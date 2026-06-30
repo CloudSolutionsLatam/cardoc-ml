@@ -50,5 +50,6 @@ resultante al [log de ADRs](decisions/README.md) si corresponde.
 
 - Auditoría on-finish (ADR-0007) no cubre un `500` de `attachContainer` (queda solo en logs). Decidir si se fuerza un registro mínimo.
 - Filas de idempotencia `pending` huérfanas (un POST que muere antes de `markCreated`) no tienen TTL/reaper → replays devuelven `202 in_progress` indefinidamente.
+- El estado `error` ahora es **reintentable** (efecto idempotente: dedup por cédula + `EXTERNAL_ID`). Residual: dos retries concurrentes de un row en `error` podrían ejecutar el efecto en paralelo (ventana acotada por los dedup, sin CAS sobre el estado del row).
 - Formalizar el smoke e2e como script versionado en el repo (hoy se corre fuera).
 - Runbooks concretos sin escribir (solo la plantilla) — dry-run pre-producción.

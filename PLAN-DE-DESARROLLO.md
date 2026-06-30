@@ -15,8 +15,8 @@ el contrato de los endpoints en [CONTRATOS.md](CONTRATOS.md).
 calendario). **Toolchain real verificado**: node 24.13, pnpm 10.29.2.
 
 > **Estado al 2026-06-25**: **E-01 completo y verificado** (typecheck, tests, lint, smoke e2e y
-> bundle en verde). **E-02 / E-03** tienen puertos y lógica de dominio listos; los adapters reales
-> (Zoho CRM, Creator/WorkDrive, DataStore productivo) son stubs `NotImplemented` y están
+> bundle en verde). **E-02 (CRM) ya implementado**; **E-03** (Creator/WorkDrive) y el DataStore
+> productivo tienen puertos y lógica listos pero sus adapters siguen como stubs `NotImplemented` y están
 > **bloqueados por las open questions** del cierre de este documento.
 
 ---
@@ -29,7 +29,7 @@ paralelos. El de-risk de plataforma corre en paralelo porque no toca código.
 | Épica | Alcance | Estado | Owner | Ventana |
 |-------|---------|--------|-------|:-------:|
 | **E-01** | Scaffold monorepo + hexagonal: dominio, puertos, use-cases, function Express, middlewares, mocks, CI, bundle, deploy-ready | ✅ **Completo y verificado** | Nestor | 22/06 |
-| **E-02** | Adapters reales CRM: `ZohoCrmClient` (Contacts/Deals/Accounts) + Catalyst Connection OAuth + persistencia DataStore productiva | 🟡 Puertos + lógica listos; adapter stub | Nestor | 23–26/06 |
+| **E-02** | Adapters reales CRM: `ZohoCrmClient` (Contacts/Deals/Accounts) + self-client OAuth + persistencia DataStore productiva | 🟢 Adapter + OAuth implementados (24 tests); falta cargar secrets + DataStore productivo | Nestor | 23–26/06 |
 | **E-03** | Adapters reales Informes: `ZohoCreatorReportsSource` + WorkDrive + flujo PDF (lazy generate + write-back) | 🟡 Puertos + lógica listos; adapter stub | Nestor | 26–30/06 |
 | **E-04** | Cap distribuido sobre Catalyst Cache (hoy contadores in-memory por contenedor) | ⬜ Pendiente | Nestor | 30/06–01/07 |
 | **E-05** | Hardening de seguridad + tenancy: matriz scope × endpoint, cross-tenant 404, secret-scan en verde sostenido | ⬜ Parcial (gates ya en CI) | Nestor | 01–02/07 |
@@ -92,7 +92,7 @@ Estado de hecho, documentado para trazabilidad. Lo construido y en verde:
 | Componente | Entregable | Anclaje |
 |------------|-----------|---------|
 | `@cardoc/domain` | Tipos, schemas Zod, `payloadFingerprint`, `hashToken`/`generateToken`. Node puro, sin SDK | `packages/domain/src/{types,schemas,idempotency,tokens}.ts` |
-| `@cardoc/providers` | Puertos `CrmClient` + `ReportsSource` + errores tipados; `MockCrmClient`/`MockReportsSource` funcionales; `ZohoCrmClient`/`ZohoCreatorReportsSource` stubs. **Único** lugar con HTTP externo | `packages/providers/src/{crm-client,reports-source,errors}.ts` |
+| `@cardoc/providers` | Puertos `CrmClient` + `ReportsSource` + errores tipados; `MockCrmClient`/`MockReportsSource` funcionales; `ZohoCrmClient` **implementado** (E-02), `ZohoCreatorReportsSource` stub (E-03). **Único** lugar con HTTP externo | `packages/providers/src/{crm-client,reports-source,errors}.ts` |
 | `@cardoc/persistence` | Entities, repositorios (puertos), `catalyst.ts` (impl DataStore por tipado estructural, sin importar el SDK), `memory.ts` (fakes) | `packages/persistence/src/{entities,repositories,catalyst,memory}.ts` |
 | `@cardoc/application` | Use-cases `createOpportunityContact`, `listInformes`, `streamReportPdf` | `packages/application/src/*.ts` |
 | `@cardoc/fn-api` | Function Advanced I/O (stack node24): `index.ts` → `export = app` (CommonJS), `app.ts` arma el Express; pipeline de middlewares de orden fijo | `apps/catalyst/functions/api/src/*` |
@@ -123,14 +123,21 @@ pnpm --filter @cardoc/fn-api run build   # tsc -b + esbuild → index.js
 anti-duplicación), el repo DataStore (`CatalystOpportunitiesRepository.insertIfAbsent` que captura el
 rechazo del UNIQUE), y el contrato de la `CrmConnection`.
 
-**Pendiente (adapter `ZohoCrmClient`)**:
+**Adapter `ZohoCrmClient` (E-02) — ✅ implementado** (`packages/providers/src/crm-client.ts`, 11 tests):
+
+| Pieza | Estado |
+|-------|--------|
+| `findContactByCedula` / `findDealByExternalId` / `createContact` / `createOpportunity` (Zoho REST v2) | ✅ (mapeo `ZOHO_CRM_FIELDS`; Pipeline `B2B`, Stage `Nueva Solicitud`; vehículo→`nota_agenda`) |
+| Token en runtime: `resolveCrmConnection` + self-client del SDK (lazy + memoizado) | ✅ (`container.ts`) |
+| Idempotencia: estado `error` reintentable + dedup de Deal por `EXTERNAL_ID` | ✅ (use-case) |
+
+**Pendiente para M1 (operativo / plataforma):**
 
 | Tarea | Salida | Bloqueo |
 |-------|--------|---------|
-| Implementar `findContactByCedula` / `createContact` / `createOpportunity` contra Zoho CRM REST | Stubs `NotImplemented` → HTTP real | **CRM-Q1** (API names de módulos estándar); CRM-Q2 ✅ resuelta |
-| Resolver la Catalyst Connection OAuth en runtime (hoy `resolveCrmConnection` devuelve stub) | `accessToken` real desde la Connection gestionada | **CAT-Q5** (setup Connection) |
+| Cargar `ZOHO_CLIENT_ID/SECRET/REFRESH_TOKEN` (+ `ZOHO_CRM_CONNECTOR_NAME`) en Environment Variables; `CARDOC_CRM_MODE=zoho` | el adapter escribe en el CRM real | secrets en consola (Nestor) |
 | Activar `CARDOC_PERSISTENCE=datastore`: crear tablas y el `UNIQUE(account_id, idempotency_key)` en consola | Idempotencia con red física, no solo lógica | **CAT-Q2** (atomicidad) — el UNIQUE del DataStore es el ancla; ⚠️ verificar (docs oficiales/consola) que el `insertRow` rechaza el segundo concurrente |
-| Sembrar `consumers` + `api_tokens` reales (hash del token, scopes, Cuenta) | 1 automotora = 1 Cuenta CRM = 1 token | — |
+| Sembrar `consumers` + `api_tokens` reales (hash del token, scopes, Cuenta "ML" `6687138000031320073`) | 1 automotora = 1 Cuenta CRM = 1 token | — |
 
 **Definición de hecho (M1)**: con `CARDOC_CRM_MODE=zoho` y `CARDOC_PERSISTENCE=datastore`, un POST
 real crea Contacto (dedup por cédula `NroCedula`) + Oportunidad en estado `Nueva Solicitud`

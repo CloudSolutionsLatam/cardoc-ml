@@ -153,7 +153,7 @@ function resolveCrmConnection(_appOrReq: unknown): CrmConnection {
 
 **Estado actual (E-02):** esta función todavía lee `ZOHO_CRM_ACCESS_TOKEN` de env (placeholder de dev). El comentario de la propia función lo deja anotado:
 
-> En `datastore` mode se resolverá el access token desde la Catalyst Connection (OAuth gestionado, E-02); en dev es un stub.
+> El access token se resuelve por **self-client a nivel código** (`resolveZohoAccessToken`): el SDK renueva con `ZOHO_CLIENT_ID/SECRET/REFRESH_TOKEN`; override directo con `ZOHO_CRM_ACCESS_TOKEN` (dev).
 
 **⚠️ verificar (docs oficiales / consola):** la **API exacta del SDK Catalyst para obtener el access token de una Connection** en runtime (nombre del método, si toma el `app` de `catalyst.initialize(req)` y el nombre del conector `ZOHO_CRM_CONNECTOR_NAME`, manejo de refresh/expiración). Cuando se confirme, `resolveCrmConnection` reemplaza el `process.env[...] ?? "dev-token"` por la llamada real al conector. Es parte del de-risk de [OPERACIONES](../../OPERACIONES.md) y del setup de Connection OAuth (open question de plataforma).
 

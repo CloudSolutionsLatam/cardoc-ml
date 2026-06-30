@@ -96,20 +96,60 @@ if (!useDatastore) {
   });
 }
 
+const ZOHO_CONNECTOR = process.env["ZOHO_CRM_CONNECTOR_NAME"] ?? "zoho_crm_conn";
+
 /**
- * Conexión CRM de runtime. En `datastore` mode se resolverá el access token desde la
- * Catalyst Connection (OAuth gestionado, E-02); en dev es un stub.
+ * Conexión CRM de runtime. Arma el resolvedor LAZY del access token (no se pide token si
+ * el request no toca CRM). El token se obtiene por **self-client a nivel código** (la
+ * Catalyst Connection tiene un bug que no genera refresh token). Secretos en Environment
+ * Variables (`ZOHO_CLIENT_ID/SECRET/REFRESH_TOKEN`); ver secretos-y-connections.md.
  */
-function resolveCrmConnection(_appOrReq: unknown): CrmConnection {
+function resolveCrmConnection(catalystApp: unknown): CrmConnection {
+  // Memoiza el token por request (buildContainer corre por request): findContact +
+  // createContact + createOpportunity comparten una sola resolución.
+  let tokenPromise: Promise<string> | undefined;
   return {
-    accessToken: process.env["ZOHO_CRM_ACCESS_TOKEN"] ?? "dev-token",
     apiDomain: process.env["ZOHO_CRM_API_DOMAIN"] ?? "https://www.zohoapis.com",
+    getAccessToken: () => (tokenPromise ??= resolveZohoAccessToken(catalystApp)),
   };
+}
+
+async function resolveZohoAccessToken(catalystApp: unknown): Promise<string> {
+  // Override directo (testing local / token de corta vida) — evita el SDK.
+  const direct = process.env["ZOHO_CRM_ACCESS_TOKEN"];
+  if (direct) return direct;
+  // Self-client: el SDK de Catalyst renueva el access token con las creds en env vars.
+  const app = catalystApp as {
+    connection(cfg: Record<string, unknown>): {
+      getConnector(name: string): { getAccessToken(): Promise<string> };
+    };
+  };
+  return app
+    .connection({
+      [ZOHO_CONNECTOR]: {
+        client_id: process.env["ZOHO_CLIENT_ID"],
+        client_secret: process.env["ZOHO_CLIENT_SECRET"],
+        auth_url: "https://accounts.zoho.com/oauth/v2/auth",
+        refresh_url: "https://accounts.zoho.com/oauth/v2/token",
+        refresh_token: process.env["ZOHO_REFRESH_TOKEN"],
+      },
+    })
+    .getConnector(ZOHO_CONNECTOR)
+    .getAccessToken();
 }
 
 /** Repos + adapters por request: DataStore (si el flag está) o in-memory sembrado. */
 export function buildContainer(req: unknown): ApiContainer {
   const crm: CrmClient = useZohoCrm ? new ZohoCrmClient() : memCrm;
+  // Fail-fast: en modo zoho sin DataStore (no hay app Catalyst para el self-client) hace
+  // falta el token directo. Sin esto, getAccessToken() reventaría TARDE (tras sembrar el
+  // row pending), envenenando el NroSolicitud. Síncrono → lo captura attachContainer → 500.
+  if (useZohoCrm && !useDatastore && !process.env["ZOHO_CRM_ACCESS_TOKEN"]) {
+    throw new Error(
+      "CARDOC_CRM_MODE=zoho en modo memory requiere ZOHO_CRM_ACCESS_TOKEN " +
+        "(o CARDOC_PERSISTENCE=datastore para resolver el token con el self-client del SDK).",
+    );
+  }
   const reports: ReportsSource = useCreator ? new ZohoCreatorReportsSource() : memReports;
 
   if (useDatastore) {

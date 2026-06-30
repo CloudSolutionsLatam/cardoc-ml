@@ -70,13 +70,16 @@ export async function createOpportunityContact(
     if (row.status === "created") {
       return { status: "duplicate", contactId: row.contactId, opportunityId: row.opportunityId };
     }
-    if (row.status === "error") {
-      return { status: "error", message: "un intento previo de este NroSolicitud terminó en error" };
+    if (row.status === "pending") {
+      return { status: "in_progress" };
     }
-    return { status: "in_progress" };
+    // status === "error": un intento previo falló. El efecto externo es IDEMPOTENTE (dedup
+    // de Contacto por cédula + de Oportunidad por EXTERNAL_ID), así que un fallo transitorio
+    // (red/5xx) es reintentable: caemos al efecto en vez de quedar muertos para siempre.
   }
 
-  // 3) Somos el creador → efecto externo en CRM.
+  // 3) Creador (row nuevo) o retry de "error" → efecto externo en CRM (idempotente).
+  const isRetry = !created;
   try {
     const existing = await deps.crm.findContactByCedula(input.nroCedula, deps.connection);
     const contact =
@@ -87,15 +90,22 @@ export async function createOpportunityContact(
           nombres: input.nombres,
           apellidos: input.apellidos,
           celular: input.celularCliente,
+          accountId: ctx.accountId,
         },
         deps.connection,
       ));
     const reusedContact = existing !== null;
 
-    const opportunity = await deps.crm.createOpportunity(
+    // En un retry, la Oportunidad pudo haberse creado en un intento previo que perdió la
+    // respuesta: buscarla por EXTERNAL_ID antes de crear evita duplicar el Deal.
+    const existingDeal = isRetry
+      ? await deps.crm.findDealByExternalId(input.nroSolicitud, deps.connection)
+      : null;
+    const opportunity =
+      existingDeal ??
+      (await deps.crm.createOpportunity(
       {
         nroSolicitud: input.nroSolicitud,
-        accountId: ctx.accountId,
         contactId: contact.id,
         stage: FIXED_OPPORTUNITY_STAGE,
         marca: input.marcaVehiculo,
@@ -108,8 +118,8 @@ export async function createOpportunityContact(
         direccion: input.direccionSucursal,
         tenant: input.tenant,
       },
-      deps.connection,
-    );
+        deps.connection,
+      ));
 
     await deps.opportunities.markCreated(ctx.accountId, idempotencyKey, {
       contactId: contact.id,

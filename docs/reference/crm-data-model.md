@@ -24,6 +24,15 @@ discovery del CRM. **No duplica** ese discovery: es la proyección mínima para 
    "B2B"` confirmados (ver §Pipeline B2B). Para otros picklists (`Estado`/depto) sigue
    valiendo `GET /settings/fields?module=Deals`.
 
+## Implementación (E-02 — ✅)
+
+`ZohoCrmClient` (`packages/providers/src/crm-client.ts`) está implementado contra Zoho REST v2:
+`findContactByCedula` (dedup), `findDealByExternalId` (idempotencia del Deal), `createContact`,
+`createOpportunity`. Token vía **self-client del SDK** (`container.ts`, lazy + memoizado por request).
+El estado `error` del use-case es **reintentable** (efecto idempotente: dedup por cédula +
+`EXTERNAL_ID`). 24 tests verdes. Falta operativo: secrets en env vars + `CARDOC_CRM_MODE=zoho` +
+DataStore productivo (UNIQUE).
+
 ## Módulos (api_name)
 
 | api_name | Label | Rol en cardoc-ml |

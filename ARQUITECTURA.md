@@ -43,8 +43,8 @@ configuración de caps. Esto mantiene a Zoho como sistema de registro y a cardoc
 una superficie de integración delgada, auditable y desacoplable.
 
 > **Estado (2026-06-25)**: E-01 (scaffold) completo y deployable. La lógica de E-02/E-03
-> (use-cases + puertos) está construida; los adapters reales (`ZohoCrmClient`,
-> `ZohoCreatorReportsSource`) son stubs `NotImplemented`. Verde verificado: `tsc -b`,
+> (use-cases + puertos) está construida; `ZohoCrmClient` **implementado** (E-02), mientras
+> `ZohoCreatorReportsSource` sigue stub `NotImplemented`. Verde verificado: `tsc -b`,
 > 7 tests (vitest), eslint, smoke e2e 16/16, bundle esbuild. Cronograma 22/06→03/07/2026,
 > owner Nestor Toñanez, 1 dev.
 

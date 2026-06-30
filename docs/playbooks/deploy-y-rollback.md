@@ -31,7 +31,7 @@ Contexto que conviene tener a mano antes de operar:
 
 ## 0. Estado del proyecto al momento de este playbook
 
-E-01 (scaffold) está completo y es **deployable**. La lógica de dominio y los puertos de E-02/E-03 están listos, pero los adapters reales (Zoho CRM / Creator / WorkDrive) son stubs `NotImplemented`. En consecuencia, **un deploy hoy con `CARDOC_CRM_MODE=zoho` / `CARDOC_REPORTS_MODE=creator` fallará en los paths que tocan esos adapters**. Para validar plataforma sin negocio real, se despliega con modos `mock`/`memory` (ver §6, matriz de variables).
+E-01 (scaffold) está completo y es **deployable**. El adapter **CRM (`ZohoCrmClient`) ya está implementado** (E-02): con los secrets cargados y `CARDOC_CRM_MODE=zoho` escribe en el CRM real. El adapter de **Reports (`ZohoCreatorReportsSource`, E-03) sigue stub** → un deploy con `CARDOC_REPORTS_MODE=creator` fallará en los paths de informes/PDF. Para validar plataforma sin negocio real, se despliega con modos `mock`/`memory` (ver §6, matriz de variables).
 
 Cronograma del sprint: 22/06 → 03/07/2026. Owner: Nestor Toñanez. Equipo: 1 dev.
 
@@ -199,7 +199,7 @@ Plantilla en [`.env.example`](../../.env.example). El `.env` local está gitigno
 | Variable | Valores | Default `.env.example` | Notas |
 |----------|---------|------------------------|-------|
 | `CARDOC_PERSISTENCE` | `datastore` \| `memory` | `memory` | `datastore` = Catalyst DataStore; otro = repos in-memory sembrados |
-| `CARDOC_CRM_MODE` | `zoho` \| `mock` | `mock` | `zoho` requiere Connection configurada; hoy es stub `NotImplemented` |
+| `CARDOC_CRM_MODE` | `zoho` \| `mock` | `mock` | `zoho` (E-02 implementado) requiere los secrets self-client en env vars |
 | `CARDOC_REPORTS_MODE` | `creator` \| `mock` | `mock` | `creator` = Zoho Creator/WorkDrive real; hoy stub |
 | `CARDOC_CAP_DEFAULT_HOUR` | entero | `1000` | cap por defecto si el consumidor no tiene config |
 | `CARDOC_CAP_DEFAULT_DAY` | entero | `10000` | |
@@ -212,8 +212,9 @@ Plantilla en [`.env.example`](../../.env.example). El `.env` local está gitigno
 
 | Entorno | Persistencia | CRM | Reports | Para qué |
 |---------|--------------|-----|---------|----------|
-| **dev / validación de plataforma (hoy, E-01)** | `memory` o `datastore` | `mock` | `mock` | validar deploy, health y plataforma sin adapters reales (que son stubs) |
-| **dev (E-02/E-03)** | `datastore` | `zoho` | `creator` | a medida que los adapters dejen de ser stubs |
+| **dev / validación de plataforma** | `memory` o `datastore` | `mock` | `mock` | validar deploy, health y plataforma sin tocar Zoho |
+| **dev CRM real (E-02)** | `datastore` | `zoho` | `mock` | probar el alta real en CRM (requiere secrets); Reports aún mock |
+| **dev (E-03)** | `datastore` | `zoho` | `creator` | cuando `ZohoCreatorReportsSource` deje de ser stub |
 | **prod** | `datastore` | `zoho` | `creator` | producción real |
 
 > Token de dev sembrado en memoria (solo con persistencia `memory`): `X-Api-Key: test-token` — todos los scopes, Cuenta `acc_dev`. **No existe en prod.** No usarlo para validar prod.

@@ -30,8 +30,8 @@ estado). Detalle: [`../ARQUITECTURA.md`](../ARQUITECTURA.md) · integración:
 
 > **Estado (2026-06-25): E-01 completo y deployable.** Verde verificado: `tsc -b`,
 > 7 tests, `eslint`, smoke e2e 16/16, bundle esbuild. La lógica de E-02/E-03 (use-cases
-> + puertos) está construida; los **adapters reales** (`ZohoCrmClient`,
-> `ZohoCreatorReportsSource`) y el **DataStore** son stubs. Sprint 22/06→03/07/2026,
+> + puertos) está construida; `ZohoCrmClient` (CRM) **implementado** (E-02), mientras
+> `ZohoCreatorReportsSource` y el **DataStore productivo** siguen stubs. Sprint 22/06→03/07/2026,
 > owner Nestor Toñanez, 1 dev.
 
 ## El modelo mental
@@ -107,8 +107,8 @@ externo, detrás de un puerto.
 
 ### "Cablear un adapter real (CRM / Creator-WorkDrive)"
 
-Hoy `ZohoCrmClient` y `ZohoCreatorReportsSource` lanzan `NotImplementedError`. Para
-implementarlos:
+Hoy `ZohoCreatorReportsSource` (Creator/WorkDrive, E-03) lanza `NotImplementedError`;
+`ZohoCrmClient` ya está implementado (E-02). Para implementar el que falta:
 
 1. [`playbooks/secretos-y-connections.md`](playbooks/secretos-y-connections.md) — cómo se
    resuelve el `accessToken` de la Catalyst Connection (CRM) y dónde viven los secretos.

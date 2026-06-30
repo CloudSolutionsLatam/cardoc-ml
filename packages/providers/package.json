@@ -8,13 +8,14 @@
   "scripts": {
     "build": "tsc -b",
     "typecheck": "tsc -b",
-    "test": "echo \"(sin tests aún — contract tests contra sandbox en Fase 1)\" && exit 0"
+    "test": "vitest run"
   },
   "dependencies": {
     "@cardoc/domain": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
-    "typescript": "5.4.5"
+    "typescript": "5.4.5",
+    "vitest": "^1.6.0"
   }
 }

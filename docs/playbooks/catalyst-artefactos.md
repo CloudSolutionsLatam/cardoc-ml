@@ -114,20 +114,20 @@ El problema del in-memory: **cada contenedor caliente tiene su propio Map**. Con
 
 ---
 
-## 4. Connections — OAuth gestionado a Zoho CRM (E-02, stub)
+## 4. Auth a Zoho CRM — self-client a nivel código (E-02)
 
 Una **Connection** de Catalyst gestiona el ciclo OAuth (token + refresh) contra un servicio Zoho, para que la función no maneje refresh tokens a mano. cardoc la usa para autenticar contra **Zoho CRM** (módulos Contacts/Deals/Accounts).
 
-### Estado en código
+### Estado en código (E-02 implementado)
 
-Hoy es un **stub**. En `container.ts`, `resolveCrmConnection()` devuelve el `accessToken` desde `ZOHO_CRM_ACCESS_TOKEN` (placeholder de dev). El comentario marca la intención:
+En `container.ts`, `resolveZohoAccessToken()` obtiene el token por **self-client del SDK**
+(`connection({...}).getConnector().getAccessToken()`) con `ZOHO_CLIENT_ID/SECRET/REFRESH_TOKEN`;
+override directo con `ZOHO_CRM_ACCESS_TOKEN` (dev). **No** se usa la Connection de consola (bug del
+refresh token). La resolución es lazy y memoizada por request.
 
-```
-En `datastore` mode se resolverá el access token desde la Catalyst Connection
-(OAuth gestionado, E-02); en dev es un stub.
-```
-
-El adapter real `ZohoCrmClient` vive en `@cardoc/providers` como stub `NotImplemented` — `packages/providers` es el **único lugar con HTTP externo**. El cableado de la Connection (resolución del token gestionado) corresponde a la **capa function**, no a `packages/*`.
+El adapter real `ZohoCrmClient` vive en `@cardoc/providers` (**implementado**, único lugar con HTTP
+externo); recibe el token vía `CrmConnection.getAccessToken()`. La resolución del token corresponde
+a la **capa function**, no a `packages/*`.
 
 Variable asociada: `ZOHO_CRM_CONNECTOR_NAME` (nombre del conector/Connection a referenciar en runtime).
 

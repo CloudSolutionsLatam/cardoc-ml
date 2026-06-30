@@ -17,8 +17,8 @@ sin esto, "API en Catalyst" es una decisión de plataforma sin contrato de calid
 
 > **Estado de los targets**: los valores numéricos son **propuestos** y requieren
 > validación con el negocio y con la plataforma. El backend está en **E-01 (scaffold
-> deployable)**: dominio, puertos y use-cases en verde; adapters reales de Zoho como
-> stubs `NotImplemented`. Lo que hoy se puede verificar en CI está marcado como tal;
+> deployable)**: dominio, puertos y use-cases en verde; `ZohoCrmClient` (CRM) implementado (E-02),
+> `ZohoCreatorReportsSource` aún stub. Lo que hoy se puede verificar en CI está marcado como tal;
 > lo que depende de la plataforma va a la sección de validaciones pendientes (§9).
 
 > **Convención de honestidad** (Unicorp Systems): cualquier afirmación sobre la
