@@ -147,12 +147,16 @@ export async function createOpportunityContact(
       contactId: r.contactId,
       opportunityId: r.opportunityId,
     });
-    return {
-      status: "created",
-      contactId: r.contactId,
-      opportunityId: r.opportunityId,
-      reusedContact: r.reusedContact,
-    };
+    // Si el Deal ya existía en el CRM (DUPLICATE_DATA), es `duplicate` aunque la clave de
+    // Capa 1 sea nueva — mismo criterio que el camino sin header (consistencia entre capas).
+    return r.dealDuplicate
+      ? { status: "duplicate", contactId: r.contactId, opportunityId: r.opportunityId }
+      : {
+          status: "created",
+          contactId: r.contactId,
+          opportunityId: r.opportunityId,
+          reusedContact: r.reusedContact,
+        };
   } catch (e) {
     await deps.opportunities.markError(ctx.accountId, idempotencyKey);
     return { status: "error", message: e instanceof Error ? e.message : String(e) };

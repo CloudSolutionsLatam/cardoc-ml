@@ -79,11 +79,24 @@ describe("Capa 1 — con X-Idempotency-Key (dedup en Catalyst, antes del CRM)", 
     expect(other.status).toBe("conflict");
   });
 
-  it("mismo key en otra Cuenta sí crea (idempotencia por tenant)", async () => {
+  it("misma key en otra Cuenta no colisiona (Capa 1 scoped por account_id)", async () => {
     const d = deps();
     await createOpportunityContact(input, ctxH, d);
-    const otherAccount = await createOpportunityContact(input, { ...ctxH, accountId: "acc_otra" }, d);
+    // misma idem-key, otra Cuenta, NroSolicitud distinto (para aislar la dedup del CRM):
+    // si la Capa 1 NO fuera account-scoped, la key colisionaría → conflict; scoped → created.
+    const otherAccount = await createOpportunityContact(
+      { ...input, nroSolicitud: 908813 },
+      { ...ctxH, accountId: "acc_otra" },
+      d,
+    );
     expect(otherAccount.status).toBe("created");
+  });
+
+  it("key nuevo pero el Deal ya existía en el CRM → duplicate (no 'created')", async () => {
+    const d = deps();
+    await createOpportunityContact(input, ctx, d); //  sin header: crea el Deal (NroSolicitud 908812)
+    const withKey = await createOpportunityContact(input, ctxH, d); // header nuevo, mismo NroSolicitud
+    expect(withKey.status).toBe("duplicate"); // Capa 2 (EXTERNAL_ID) manda aunque la clave de Capa 1 sea nueva
   });
 });
 

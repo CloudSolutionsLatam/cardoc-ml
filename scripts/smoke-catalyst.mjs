@@ -33,7 +33,18 @@ check("  X-Correlation-Id presente", Boolean(r.headers.get("x-correlation-id")))
 
 r = await fetch(`${base}/v1/opportunity-contact`, { method: "POST", headers: JSONH, body: JSON.stringify(body) });
 j = await r.json().catch(() => ({}));
-check("POST repetido mismo NroSolicitud → 200 duplicate", r.status === 200 && j.status === "duplicate", `${r.status}`);
+check("POST repetido mismo NroSolicitud (sin header) → 200 duplicate (Capa 2)", r.status === 200 && j.status === "duplicate", `${r.status}`);
+
+// Capa 1 (con X-Idempotency-Key): created → conflict (misma clave, payload distinto)
+const IDEM = { ...JSONH, "X-Idempotency-Key": "smoke-cat-1" };
+const body1 = { ...body, NroSolicitud: 908850 };
+r = await fetch(`${base}/v1/opportunity-contact`, { method: "POST", headers: IDEM, body: JSON.stringify(body1) });
+j = await r.json().catch(() => ({}));
+check("POST con idem-key → 201 created (Capa 1)", r.status === 201 && j.status === "created", `${r.status} ${JSON.stringify(j)}`);
+
+r = await fetch(`${base}/v1/opportunity-contact`, { method: "POST", headers: IDEM, body: JSON.stringify({ ...body1, MarcaVehiculo: "Fiat" }) });
+j = await r.json().catch(() => ({}));
+check("POST misma idem-key + payload distinto → 409 (Capa 1)", r.status === 409 && j?.error?.code === "IDEMPOTENCY_CONFLICT", `${r.status}`);
 
 r = await fetch(`${base}/v1/informes`, { headers: AUTH });
 j = await r.json().catch(() => ({}));
