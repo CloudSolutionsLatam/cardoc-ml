@@ -37,7 +37,9 @@ Cronograma del sprint: 22/06 → 03/07/2026. Owner: Nestor Toñanez. Equipo: 1 d
 
 **Ya desplegado:** la función `api` está viva en el proyecto **ML** (env Development),
 `https://ml-909785950.development.catalystserverless.com/server/api/`, modo `memory+mock`,
-**smoke remoto 12/12 verde** (2026-06-25).
+**smoke remoto 12/12 verde**. Re-deploy con **E-02** (`ZohoCrmClient` real) el 2026-06-30 —
+smoke 12/12 verde (incl. `stage "Nueva Solicitud"`). El **modo CRM real** requiere setear en la
+consola los env vars del self-client + `CARDOC_CRM_MODE=zoho` (ver §6, matriz de variables).
 
 ---
 
