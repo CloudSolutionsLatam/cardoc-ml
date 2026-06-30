@@ -17,9 +17,49 @@ los **headers definen las columnas** al importar, y dos traen ya la **fila de se
    > Si tu consola **no** crea la tabla desde el import: creá las 5 tablas a mano con esas
    > columnas (snake_case) e importá los 2 CSV con seed a las tablas ya creadas.
 
-2. **Tipos de columna:** todo **texto/Varchar**, EXCEPTO enteros en:
-   `audit_log.http_status`, `audit_log.latency_ms`, `consumer_caps.limit_hour/limit_day/limit_week`.
-   (Los ids de Zoho —account_id, etc.— van como **texto**, no número.)
+2. **Columnas y tipos EXACTOS** (tipo Catalyst + longitud sugerida para `Var Char`):
+
+   | Tabla | Columna | Tipo | Long. | UNIQUE/índice |
+   |---|---|---|---|---|
+   | `api_tokens` | `token_hash` | Var Char | 64 | **UNIQUE** |
+   | | `consumer_id` | Var Char | 100 | índice |
+   | | `account_id` | Var Char | 50 | |
+   | | `scopes` | Var Char | 255 | |
+   | | `expires_at` | Var Char | 40 | |
+   | | `last_used_at` | Var Char | 40 | |
+   | | `revoked_at` | Var Char | 40 | |
+   | `consumers` | `consumer_id` | Var Char | 100 | **UNIQUE** |
+   | | `crm_account_id` | Var Char | 50 | **UNIQUE** |
+   | | `name` | Var Char | 255 | |
+   | | `status` | Var Char | 20 | |
+   | `crm_opportunities` | `account_id` | Var Char | 50 | 🔴 **UNIQUE(account_id, idempotency_key)** |
+   | | `idempotency_key` | Var Char | 255 | (parte del UNIQUE) |
+   | | `payload_fingerprint` | Var Char | 64 | |
+   | | `contact_id` | Var Char | 50 | |
+   | | `opportunity_id` | Var Char | 50 | |
+   | | `status` | Var Char | 20 | |
+   | | `correlation_id` | Var Char | 64 | |
+   | | `created_at` | Var Char | 40 | |
+   | | `updated_at` | Var Char | 40 | |
+   | `audit_log` | `timestamp` | Var Char | 40 | |
+   | | `correlation_id` | Var Char | 64 | índice |
+   | | `consumer_id` | Var Char | 100 | |
+   | | `account_id` | Var Char | 50 | |
+   | | `endpoint` | Var Char | 50 | |
+   | | `outcome` | Var Char | 20 | |
+   | | `http_status` | **Int** | — | |
+   | | `latency_ms` | **Int** | — | |
+   | | `error_code` | Var Char | 50 | |
+   | `consumer_caps` | `consumer_id` | Var Char | 100 | UNIQUE(consumer_id, endpoint) |
+   | | `endpoint` | Var Char | 50 | (parte del UNIQUE) |
+   | | `limit_hour` | **Int** | — | |
+   | | `limit_day` | **Int** | — | |
+   | | `limit_week` | **Int** | — | |
+
+   > **NO usar `BigInt`** para los ids de Zoho (`account_id`, `crm_account_id`, `contact_id`,
+   > `opportunity_id`): son de 19 dígitos y JS perdería precisión → van como **`Var Char`** (el
+   > código los trata como string). **NO usar `DateTime`** en las fechas: el código guarda/lee
+   > strings ISO 8601 → **`Var Char`**.
 
 3. **Constraints A MANO** (la parte que no se puede saltear):
    - 🔴 `crm_opportunities`: **UNIQUE(account_id, idempotency_key)** — sin esto la idempotencia falla en silencio.
