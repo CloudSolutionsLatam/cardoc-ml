@@ -1,0 +1,2 @@
+token_hash,consumer_id,account_id,scopes,expires_at,last_used_at,revoked_at
+4c5dc9b7708905f77f5e5d16316b5dfb425e68cb326dcd55a860e90a7707031e,consumer_ml,6687138000031320073,"[""opportunities:create"",""reports:read"",""reports:pdf""]",,,

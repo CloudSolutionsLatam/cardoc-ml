@@ -1,0 +1,1 @@
+account_id,idempotency_key,payload_fingerprint,contact_id,opportunity_id,status,correlation_id,created_at,updated_at
