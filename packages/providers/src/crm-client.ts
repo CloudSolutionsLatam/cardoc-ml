@@ -35,13 +35,23 @@ export const ZOHO_CRM_FIELDS = {
   deal: {
     name: "Deal_Name", //         system_mandatory
     stage: "Stage", //            system_mandatory; valor = FIXED_OPPORTUNITY_STAGE
-    pipeline: "Pipeline", //      system_mandatory; valor por confirmar
+    pipeline: "Pipeline", //      system_mandatory; valor = ZOHO_FIXED_PIPELINE
     contact: "Contact_Name", //   lookup → Contacts
     externalId: "EXTERNAL_ID", // custom ← NroSolicitud (ADR-0002)
     // Agenda (fase posterior): Inspector→Inspectores, Vehiculo→Products,
     // Fecha_y_hora_de_visita_programada, nota_agenda, Ciudad/Calle/N_mero/Estado.
   },
 } as const;
+
+/**
+ * Pipeline fijo al crear el Deal (`Deals.Pipeline` es `system_mandatory`). Las solicitudes
+ * AutoCheck viven en el pipeline **B2B**, cuyo flujo de stages es:
+ * `Nueva Solicitud` → `Agendado B2B` → `Completado` → `Cerrado` | `Cancelado`.
+ * OJO: el stage inicial `Nueva Solicitud` (= `FIXED_OPPORTUNITY_STAGE`) pertenece a ESTE
+ * pipeline, NO al `Standard` (default) — crear el Deal con `Standard` + ese stage sería
+ * inconsistente y Zoho lo rechaza. Confirmado vía `settings/pipeline` (Nestor 2026-06-30).
+ */
+export const ZOHO_FIXED_PIPELINE = "B2B" as const;
 
 /** Datos del Contacto a crear (de lo que manda ML). Dedup por `nroCedula`. */
 export interface CrmContactData {

@@ -266,17 +266,16 @@ o con la consola/docs de Catalyst.
 - **PDF-Q1**: cuando `Analisis.pdf_url` está vacío, ¿cómo se genera el PDF? (plantilla nativa de
   Creator vs HTML→PDF en Catalyst vs servicio existente).
 - **PDF-Q2**: ¿de qué datos sale el PDF y cuál es la relación entre los forms `Informes` y `Analisis`?
-- **CRM-Q1**: 🟢 Parcial — api_names estándar de Contacts/Deals/Accounts/Products capturados del
-  discovery del CRM ([`docs/reference/crm-data-model.md`](docs/reference/crm-data-model.md)).
-  Falta: **valores de picklist** (incl. `Stage`) vía `GET /settings/fields?module=Deals` (el
-  discovery no los trae).
+- **CRM-Q1**: ✅ api_names estándar capturados + `Stage = "Nueva Solicitud"` y `Pipeline = "B2B"`
+  **verificados** (`settings/stages`/`settings/pipeline`). Ver
+  [`docs/reference/crm-data-model.md`](docs/reference/crm-data-model.md).
 - **CRM-Q2**: ✅ Resuelto (Nestor 2026-06-30) — Stage de Deals = `Nueva Solicitud` (provisional); campos custom `Cedula` (Contacts) y `EXTERNAL_ID` (Deals) creados.
 - **CRM-Q3**: ✅ Resuelto (Nestor 2026-06-30) — Cuenta "ML" **vía Contacto** (`Contacts.Account_Name`);
   el Deal no lleva Cuenta (no se crea lookup en Deals).
 - **CRM-Q4**: ✅ Resuelto (Nestor 2026-06-30) — vehículo como **texto en `nota_agenda`** del Deal;
   no se modela `Products`/`Marcas`/`Modelos`.
-- **CRM-Q5**: `Pipeline` (`system_mandatory`) — hay un **Pipeline específico** de AutoCheck; falta el
-  valor exacto (junto con el string del `Stage`, vía `GET /settings/fields?module=Deals`).
+- **CRM-Q5**: ✅ Resuelto — `Pipeline = "B2B"` (`ZOHO_FIXED_PIPELINE`); flujo B2B:
+  Nueva Solicitud → Agendado B2B → Completado → Cerrado | Cancelado.
 
 ### Plataforma Catalyst (de-risk antes de producción)
 

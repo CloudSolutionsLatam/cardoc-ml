@@ -19,10 +19,10 @@ discovery del CRM. **No duplica** ese discovery: es la proyección mínima para 
    el **2026-06-30** (`EXTERNAL_ID` en Deals, `Cedula` en Contacts). Por eso **esos
    dos campos NO aparecen en el dump** — no es un error, el dump los precede. Sus
    api_names vienen confirmados directamente por Nestor, no del dump.
-2. **El export NO incluye valores de picklist** (`pick_list_values`) en ningún
-   archivo. ⇒ **no se puede verificar desde acá** que `Nueva Solicitud` sea un valor
-   válido del `Stage`, ni los valores de `Pipeline`/`Estado`. Verificar con
-   `GET /crm/v2/settings/fields?module=Deals` antes de cablear el create real.
+2. **El discovery NO incluye valores de picklist.** Resuelto aparte con `settings/stages`
+   + `settings/pipeline` (Nestor 2026-06-30): `Stage = "Nueva Solicitud"` y `Pipeline =
+   "B2B"` confirmados (ver §Pipeline B2B). Para otros picklists (`Estado`/depto) sigue
+   valiendo `GET /settings/fields?module=Deals`.
 
 ## Módulos (api_name)
 
@@ -51,8 +51,8 @@ discovery del CRM. **No duplica** ese discovery: es la proyección mínima para 
 | Payload ML | Campo CRM (api_name) | Tipo | Nota |
 |---|---|---|---|
 | (fijo) | `Deal_Name` | text (120) | `system_mandatory`. Componer (ej. `"ML <NroSolicitud>"`). |
-| (fijo) | `Stage` | picklist | `system_mandatory`. Valor = `FIXED_OPPORTUNITY_STAGE` = `"Nueva Solicitud"` (sin verificar contra picklist). |
-| (fijo) | `Pipeline` | picklist | **`system_mandatory`**. Existe un Pipeline específico para AutoCheck (**CRM-Q5**) — valor pendiente de que Nestor lo pase. |
+| (fijo) | `Stage` | picklist | `system_mandatory`. Valor = `FIXED_OPPORTUNITY_STAGE` = `"Nueva Solicitud"` ✅ (confirmado en `settings/stages`, id …31320001). |
+| (fijo) | `Pipeline` | picklist | **`system_mandatory`**. Valor = **`"B2B"`** (`ZOHO_FIXED_PIPELINE`). `Nueva Solicitud` es stage de este pipeline, no del `Standard`. |
 | (contacto creado) | `Contact_Name` | lookup → `Contacts` | `{ "Contact_Name": { "id": "<contactId>" } }`. |
 | `nroSolicitud` | `EXTERNAL_ID` | (custom) | **No estaba en el dump** (creado 2026-06-30). |
 | `marca`/`modelo`/`anio`/`matricula` (+ sucursal/dir.) | `nota_agenda` | textarea | **Decisión CRM-Q4:** el adapter compone un texto con el vehículo + sucursal y lo escribe acá. **No** se modela `Products`. |
@@ -69,6 +69,26 @@ discovery del CRM. **No duplica** ese discovery: es la proyección mínima para 
 `Account_Name` (text, mandatory) la nombra; `External_Account_ID` (text custom) sirve
 para matchearla sin el id interno; `Account_Type` / `Categoria_cliente` (picklists) la
 segmentan. Único lookup outbound: `Owner` → user (es la raíz).
+
+## Pipeline B2B (flujo de stages)
+
+Las solicitudes AutoCheck van en el pipeline **`B2B`** (no el `Standard` default). Su flujo
+(de `settings/pipeline`, confirmado 2026-06-30):
+
+`Nueva Solicitud` → `Agendado B2B` → `Completado` → `Cerrado` | `Cancelado`
+
+- El alta crea el Deal con `Pipeline = "B2B"` + `Stage = "Nueva Solicitud"`.
+- ⚠️ `Nueva Solicitud` **no** existe en el pipeline `Standard`; mezclar pipeline/stage de
+  pipelines distintos hace que Zoho rechace el create.
+
+**Candidato de mapeo `Stage` → ML `Estado`** (OQ-N6, outbound E-07 — **a confirmar con Nestor**):
+
+| Stage B2B | ML `Estado` |
+|---|---|
+| `Nueva Solicitud` | — (inicial, sin notificar) |
+| `Agendado B2B` | `COORDINACIÓN` |
+| `Completado` / `Cerrado` | `FINALIZADO` (requiere `LinkResultado`) |
+| `Cancelado` | — (terminal; ML no tiene estado de cancelación) |
 
 ## Hallazgos estructurales (cambian el diseño del adapter)
 
@@ -90,10 +110,11 @@ segmentan. Único lookup outbound: `Owner` → user (es la raíz).
 
 ## Pendiente de confirmar
 
-- **CRM-Q1** (parcial): api_names estándar capturados acá; faltan los **valores de
-  picklist** vía `GET /settings/fields?module=Deals` — en particular **confirmar el string
-  exacto del `Stage` ("Nueva Solicitud")** y el valor del `Pipeline`.
+- **CRM-Q1**: ✅ api_names estándar + `Stage = "Nueva Solicitud"` y `Pipeline = "B2B"`
+  confirmados (`settings/stages`/`settings/pipeline`). Menor pendiente: valores del picklist
+  `Estado` (depto) si se decide poblarlo.
 - **CRM-Q3**: ✅ Resuelto — Cuenta "ML" vía Contacto (`Contacts.Account_Name`).
 - **CRM-Q4**: ✅ Resuelto — vehículo como texto en `nota_agenda`; no se modela `Products`.
-- **CRM-Q5**: valor del `Pipeline` específico de AutoCheck (pendiente de que Nestor lo pase).
-- **OAuth** ([OQ-P3](../OPEN-QUESTIONS.md)): self-client (client_id/secret/refresh_token) para escribir en CRM.
+- **CRM-Q5**: ✅ Resuelto — `Pipeline = "B2B"` (`ZOHO_FIXED_PIPELINE`).
+- **OAuth** ([OQ-P3](../OPEN-QUESTIONS.md)): self-client (client_id/secret/refresh_token) para
+  escribir en CRM. **Único bloqueante restante del adapter real.**
