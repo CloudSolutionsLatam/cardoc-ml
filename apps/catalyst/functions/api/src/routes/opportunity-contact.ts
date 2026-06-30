@@ -1,8 +1,8 @@
 /**
  * POST /v1/opportunity-contact — crea/reutiliza Contacto + crea Oportunidad
- * ('Agendamiento Ready', fijado server-side). Idempotente por X-Idempotency-Key.
+ * ('Agendamiento Ready', server-side). Idempotente por `NroSolicitud` (del body).
  *
- * La ruta solo valida forma + headers y traduce el outcome del use-case a HTTP.
+ * La ruta solo valida forma y traduce el outcome del use-case a HTTP.
  */
 import type { RequestHandler } from "express";
 import { FIXED_OPPORTUNITY_STAGE, opportunityContactSchema } from "@cardoc/domain";
@@ -11,13 +11,6 @@ import type { AuthedRequest } from "../middleware/auth";
 import { ApiError, asyncHandler } from "../middleware/errors";
 
 export const opportunityContactHandler: RequestHandler = asyncHandler<AuthedRequest>(async (req, res): Promise<void> => {
-  const idempotencyKey = req.header("x-idempotency-key")?.trim() ?? "";
-  if (idempotencyKey.length === 0) {
-    throw new ApiError(400, "VALIDATION_ERROR", "falta el header X-Idempotency-Key", {
-      header: "X-Idempotency-Key",
-    });
-  }
-
   const parsed = opportunityContactSchema.safeParse(req.body);
   if (!parsed.success) {
     throw new ApiError(400, "VALIDATION_ERROR", "payload inválido", {
@@ -32,9 +25,10 @@ export const opportunityContactHandler: RequestHandler = asyncHandler<AuthedRequ
   }
 
   const correlationId = req.correlationId ?? "";
+  const nroSolicitud = parsed.data.nroSolicitud;
   const outcome = await createOpportunityContact(
     parsed.data,
-    { accountId, correlationId, idempotencyKey },
+    { accountId, correlationId },
     { opportunities: container.opportunities, crm: container.crm, connection: container.connection },
   );
 
@@ -43,7 +37,7 @@ export const opportunityContactHandler: RequestHandler = asyncHandler<AuthedRequ
       res.status(201).json({
         status: "created",
         correlationId,
-        idempotencyKey,
+        nroSolicitud,
         contact: { id: outcome.contactId, reused: outcome.reusedContact },
         opportunity: { id: outcome.opportunityId, stage: FIXED_OPPORTUNITY_STAGE },
       });
@@ -52,20 +46,20 @@ export const opportunityContactHandler: RequestHandler = asyncHandler<AuthedRequ
       res.status(200).json({
         status: "duplicate",
         correlationId,
-        idempotencyKey,
+        nroSolicitud,
         contact: { id: outcome.contactId },
         opportunity: { id: outcome.opportunityId, stage: FIXED_OPPORTUNITY_STAGE },
       });
       return;
     case "in_progress":
-      res.status(202).json({ status: "in_progress", correlationId, idempotencyKey });
+      res.status(202).json({ status: "in_progress", correlationId, nroSolicitud });
       return;
     case "conflict":
       throw new ApiError(
         409,
         "IDEMPOTENCY_CONFLICT",
-        "la misma X-Idempotency-Key se usó con un payload distinto",
-        { idempotencyKey },
+        "el mismo NroSolicitud llegó con un payload distinto",
+        { nroSolicitud },
       );
     case "error":
       throw new ApiError(502, "UPSTREAM_ERROR", "no se pudo crear en CRM", { upstream: "crm" });

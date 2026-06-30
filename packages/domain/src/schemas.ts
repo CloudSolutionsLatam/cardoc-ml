@@ -1,38 +1,57 @@
 /**
  * Schemas de validación (Zod).
  *
- * La validación de FORMA vive acá. `.strict()` en la query de informes hace que un
- * parámetro fuera de la allowlist sea un error → la ruta lo traduce a 422 UNPROCESSABLE
- * (refuerza la tenancy: el consumidor no puede colar un filtro de Cuenta).
+ * `opportunityContactSchema` valida el payload PascalCase de ML/AutoCheck (`.strict()`
+ * → un campo desconocido es error → 400) y lo transforma a la forma camelCase del
+ * dominio (`OpportunityContactInput`). La query de informes usa `.strict()` para que
+ * un parámetro fuera de la allowlist sea 422 (refuerza la tenancy).
  */
 import { z } from "zod";
+import type { OpportunityContactInput } from "./types";
 
 export const countrySchema = z.enum(["UY", "AR", "US"]);
 export const estadoInformeSchema = z.enum(["en_progreso", "completado", "cerrado"]);
 
-// ── POST /v1/opportunity-contact ─────────────────────────────────────────────
+// ── POST /v1/opportunity-contact (payload inbound de ML/AutoCheck) ────────────
 
-export const contactInputSchema = z.object({
-  documento: z.string().min(1, "documento (CI/RUT) requerido para deduplicar el Contacto"),
-  nombre: z.string().min(1),
-  email: z.string().email().optional(),
-  telefono: z.string().optional(),
-  pais: countrySchema.optional(),
-});
-
-export const opportunityInputSchema = z.object({
-  nombre: z.string().min(1),
-  meta: z.record(z.unknown()).optional(),
-});
+const optStr = (max: number) => z.string().max(max).optional();
 
 export const opportunityContactSchema = z
   .object({
-    contact: contactInputSchema,
-    opportunity: opportunityInputSchema,
+    NroCedula: z.coerce.number().int().positive(),
+    NroSolicitud: z.coerce.number().int().positive(),
+    Nombres: z.string().min(1).max(100),
+    Apellidos: z.string().min(1).max(100),
+    CelularCliente: optStr(30),
+    Tenant: optStr(100),
+    Sucursal: optStr(100),
+    DepartamentoSucursal: optStr(100),
+    CiudadSucursal: optStr(100),
+    DireccionSucursal: optStr(200),
+    MarcaVehiculo: optStr(100),
+    ModeloVehiculo: optStr(100),
+    AnioVehiculo: z.coerce.number().int().optional(),
+    MatriculaVehiculo: optStr(30),
   })
-  .strict();
-
-export type OpportunityContactBody = z.infer<typeof opportunityContactSchema>;
+  .strict()
+  .transform(
+    (v): OpportunityContactInput => ({
+      nroCedula: v.NroCedula,
+      nroSolicitud: v.NroSolicitud,
+      nombres: v.Nombres,
+      apellidos: v.Apellidos,
+      celularCliente: v.CelularCliente,
+      tenant: v.Tenant,
+      sucursal: v.Sucursal,
+      departamentoSucursal: v.DepartamentoSucursal,
+      ciudadSucursal: v.CiudadSucursal,
+      direccionSucursal: v.DireccionSucursal,
+      marcaVehiculo: v.MarcaVehiculo,
+      modeloVehiculo: v.ModeloVehiculo,
+      anioVehiculo: v.AnioVehiculo,
+      matriculaVehiculo: v.MatriculaVehiculo,
+    }),
+  );
 
 // ── GET /v1/informes ─────────────────────────────────────────────────────────
 

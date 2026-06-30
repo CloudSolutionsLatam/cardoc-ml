@@ -18,7 +18,8 @@ const check = (name, cond, extra = "") =>
   cond ? (pass++, console.log(`  PASS  ${name}`)) : (fail++, console.log(`  FAIL  ${name}  ${extra}`));
 
 const AUTH = { "X-Api-Key": "test-token" };
-const body = { contact: { documento: "1.234.567-8", nombre: "Ana Pérez" }, opportunity: { nombre: "Revisión VW Amarok" } };
+const JSONH = { ...AUTH, "Content-Type": "application/json" };
+const body = { NroCedula: 45321890, NroSolicitud: 908812, Nombres: "Juan Carlos", Apellidos: "Pérez Rodríguez", CelularCliente: "099123456", MarcaVehiculo: "Chevrolet", ModeloVehiculo: "Onix", AnioVehiculo: 2022, MatriculaVehiculo: "SBA1234" };
 
 let r = await fetch(`${base}/v1/health`);
 check("GET /v1/health → 200", r.status === 200);
@@ -28,24 +29,23 @@ let j = await r.json();
 check("GET /v1/informes sin token → 401", r.status === 401, `got ${r.status}`);
 check("  sobre de error con code", j?.error?.code === "UNAUTHENTICATED", JSON.stringify(j));
 
-r = await fetch(`${base}/v1/opportunity-contact`, { method: "POST", headers: { ...AUTH, "Content-Type": "application/json" }, body: JSON.stringify(body) });
+r = await fetch(`${base}/v1/opportunity-contact`, { method: "POST", headers: JSONH, body: JSON.stringify({ NroCedula: 1, Nombres: "A", Apellidos: "B" }) });
 j = await r.json();
-check("POST sin X-Idempotency-Key → 400 VALIDATION_ERROR", r.status === 400 && j?.error?.code === "VALIDATION_ERROR", `got ${r.status}`);
+check("POST sin NroSolicitud → 400 VALIDATION_ERROR", r.status === 400 && j?.error?.code === "VALIDATION_ERROR", `got ${r.status}`);
 
-const idem = { ...AUTH, "Content-Type": "application/json", "X-Idempotency-Key": "key-001" };
-r = await fetch(`${base}/v1/opportunity-contact`, { method: "POST", headers: idem, body: JSON.stringify(body) });
+r = await fetch(`${base}/v1/opportunity-contact`, { method: "POST", headers: JSONH, body: JSON.stringify(body) });
 j = await r.json();
 check("POST opportunity-contact → 201 created", r.status === 201 && j.status === "created", `got ${r.status} ${JSON.stringify(j)}`);
 check("  stage = 'Agendamiento Ready' (server-side)", j?.opportunity?.stage === "Agendamiento Ready");
 check("  X-Correlation-Id presente", Boolean(r.headers.get("x-correlation-id")));
 
-r = await fetch(`${base}/v1/opportunity-contact`, { method: "POST", headers: idem, body: JSON.stringify(body) });
+r = await fetch(`${base}/v1/opportunity-contact`, { method: "POST", headers: JSONH, body: JSON.stringify(body) });
 j = await r.json();
-check("POST repetido misma clave → 200 duplicate", r.status === 200 && j.status === "duplicate", `got ${r.status}`);
+check("POST repetido mismo NroSolicitud → 200 duplicate", r.status === 200 && j.status === "duplicate", `got ${r.status}`);
 
-r = await fetch(`${base}/v1/opportunity-contact`, { method: "POST", headers: idem, body: JSON.stringify({ ...body, opportunity: { nombre: "Otra" } }) });
+r = await fetch(`${base}/v1/opportunity-contact`, { method: "POST", headers: JSONH, body: JSON.stringify({ ...body, MarcaVehiculo: "Fiat" }) });
 j = await r.json();
-check("POST misma clave + payload distinto → 409", r.status === 409 && j?.error?.code === "IDEMPOTENCY_CONFLICT", `got ${r.status}`);
+check("POST mismo NroSolicitud + payload distinto → 409", r.status === 409 && j?.error?.code === "IDEMPOTENCY_CONFLICT", `got ${r.status}`);
 
 r = await fetch(`${base}/v1/informes`, { headers: AUTH });
 j = await r.json();

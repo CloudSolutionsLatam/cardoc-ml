@@ -7,7 +7,8 @@ const check = (name, cond, extra = "") =>
   cond ? (pass++, console.log(`  PASS  ${name}`)) : (fail++, console.log(`  FAIL  ${name}  ${extra}`));
 
 const AUTH = { "X-Api-Key": "test-token" };
-const body = { contact: { documento: "1", nombre: "Ana" }, opportunity: { nombre: "Rev" } };
+const JSONH = { ...AUTH, "Content-Type": "application/json" };
+const body = { NroCedula: 45321890, NroSolicitud: 908812, Nombres: "Juan Carlos", Apellidos: "Pérez Rodríguez", CelularCliente: "099123456", MarcaVehiculo: "Chevrolet", ModeloVehiculo: "Onix", AnioVehiculo: 2022, MatriculaVehiculo: "SBA1234" };
 
 console.log(`base = ${base}\n`);
 
@@ -24,16 +25,15 @@ check("GET /v1/health → 200 {status:ok}", r.status === 200 && j.status === "ok
 r = await fetch(`${base}/v1/informes`);
 check("GET /v1/informes sin token → 401", r.status === 401, `${r.status}`);
 
-const idem = { ...AUTH, "Content-Type": "application/json", "X-Idempotency-Key": "cat-1" };
-r = await fetch(`${base}/v1/opportunity-contact`, { method: "POST", headers: idem, body: JSON.stringify(body) });
+r = await fetch(`${base}/v1/opportunity-contact`, { method: "POST", headers: JSONH, body: JSON.stringify(body) });
 j = await r.json().catch(() => ({}));
 check("POST opportunity-contact → 201 created", r.status === 201 && j.status === "created", `${r.status} ${JSON.stringify(j)}`);
 check("  stage 'Agendamiento Ready' server-side", j?.opportunity?.stage === "Agendamiento Ready");
 check("  X-Correlation-Id presente", Boolean(r.headers.get("x-correlation-id")));
 
-r = await fetch(`${base}/v1/opportunity-contact`, { method: "POST", headers: idem, body: JSON.stringify(body) });
+r = await fetch(`${base}/v1/opportunity-contact`, { method: "POST", headers: JSONH, body: JSON.stringify(body) });
 j = await r.json().catch(() => ({}));
-check("POST repetido misma clave → 200 duplicate", r.status === 200 && j.status === "duplicate", `${r.status}`);
+check("POST repetido mismo NroSolicitud → 200 duplicate", r.status === 200 && j.status === "duplicate", `${r.status}`);
 
 r = await fetch(`${base}/v1/informes`, { headers: AUTH });
 j = await r.json().catch(() => ({}));
