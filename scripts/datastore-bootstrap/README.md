@@ -60,6 +60,11 @@ los **headers definen las columnas** al importar, y dos traen ya la **fila de se
    > `opportunity_id`): son de 19 dígitos y JS perdería precisión → van como **`Var Char`** (el
    > código los trata como string). **NO usar `DateTime`** en las fechas: el código guarda/lee
    > strings ISO 8601 → **`Var Char`**.
+   >
+   > **Tampoco `Foreign Key`:** el FK de Catalyst referencia el `ROWID` (id de sistema) de la
+   > tabla padre, pero el código enlaza por **clave de negocio string** (`consumer_id='consumer_ml'`,
+   > `account_id`=id de Cuenta Zoho) vía ZCQL `WHERE consumer_id = '...'`, no por ROWID. Además
+   > `account_id` apunta a una Cuenta de **Zoho** (externa), no a una tabla local. Por eso `Var Char`.
 
 3. **Constraints A MANO** (la parte que no se puede saltear):
    - 🔴 `crm_opportunities`: **UNIQUE(account_id, idempotency_key)** — sin esto la idempotencia falla en silencio.
