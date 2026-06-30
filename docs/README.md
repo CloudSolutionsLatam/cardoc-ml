@@ -19,6 +19,7 @@ calidad, operaciones, plan, contratos) viven en la raíz del repo; acá están l
 |-----------|-----------|
 | [decisions/README.md](decisions/README.md) | Log de **ADRs** (decisiones de arquitectura, irreversibles sin nueva ADR) |
 | [OPEN-QUESTIONS.md](OPEN-QUESTIONS.md) | **Registro único** de preguntas abiertas (negocio + plataforma) |
+| [reference/crm-data-model.md](reference/crm-data-model.md) | **api_names reales del CRM** (Contacts/Deals/Accounts/Products) que toca el adapter + hallazgos estructurales |
 
 ## Método (raíz del repo)
 

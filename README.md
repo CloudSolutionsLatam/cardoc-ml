@@ -42,6 +42,7 @@ API en **Zoho Catalyst** (Advanced I/O) para automotoras. Tres endpoints `/v1`:
 | [PLAN-DE-DESARROLLO.md](PLAN-DE-DESARROLLO.md) | Épicas E-01..E-06, milestones, estado, estrategia de testing |
 | [docs/decisions/](docs/decisions/README.md) | Log de decisiones de arquitectura (ADRs) |
 | [docs/OPEN-QUESTIONS.md](docs/OPEN-QUESTIONS.md) | Registro único de preguntas abiertas (negocio + plataforma) |
+| [docs/reference/crm-data-model.md](docs/reference/crm-data-model.md) | Mapa de api_names del CRM (Contacts/Deals/Accounts/Products) para el adapter `ZohoCrmClient` |
 | [docs/](docs/README.md) | Índice de **playbooks** (Catalyst, build/bundling, deploy, secretos, DataStore) y **runbooks** |
 
 ## Estructura

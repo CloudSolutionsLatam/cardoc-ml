@@ -14,14 +14,33 @@ export interface CrmConnection {
 }
 
 /**
- * API names de los campos custom del CRM (creados por Nestor, 2026-06-30). El
- * adapter real (E-02) los usa para mapear el payload de ML a los módulos Zoho.
+ * api_names reales del CRM que usa el adapter (E-02), mapa de `payload ML → campo Zoho`.
+ * Módulos y campos estándar confirmados contra el discovery del CRM (snapshot 2026-06-25);
+ * los dos custom (`Cedula`, `EXTERNAL_ID`) los confirmó Nestor 2026-06-30 (posteriores al
+ * dump, por eso no figuran en él). Detalle y caveats: `docs/reference/crm-data-model.md`.
  */
 export const ZOHO_CRM_FIELDS = {
-  /** Contacts: cédula del cliente — llave de deduplicación (ADR-0003). */
-  contactCedula: "Cedula",
-  /** Deals: External ID — persiste el `NroSolicitud` de AutoCheck (ADR-0002). */
-  dealExternalId: "EXTERNAL_ID",
+  /** api_names de módulo. */
+  modules: { contacts: "Contacts", deals: "Deals", accounts: "Accounts", products: "Products" },
+  /** Contacts — campos que escribe `createContact`. */
+  contact: {
+    cedula: "Cedula", //          custom — llave de dedup (ADR-0003)
+    firstName: "First_Name",
+    lastName: "Last_Name", //     único system_mandatory del módulo
+    mobile: "Mobile", //          OJO: este CRM no tiene campo "Phone"
+    email: "Email",
+    account: "Account_Name", //   lookup → Accounts (así cuelga la Cuenta "ML")
+  },
+  /** Deals — campos que escribe `createOpportunity`. */
+  deal: {
+    name: "Deal_Name", //         system_mandatory
+    stage: "Stage", //            system_mandatory; valor = FIXED_OPPORTUNITY_STAGE
+    pipeline: "Pipeline", //      system_mandatory; valor por confirmar
+    contact: "Contact_Name", //   lookup → Contacts
+    externalId: "EXTERNAL_ID", // custom ← NroSolicitud (ADR-0002)
+    // Agenda (fase posterior): Inspector→Inspectores, Vehiculo→Products,
+    // Fecha_y_hora_de_visita_programada, nota_agenda, Ciudad/Calle/N_mero/Estado.
+  },
 } as const;
 
 /** Datos del Contacto a crear (de lo que manda ML). Dedup por `nroCedula`. */
@@ -35,7 +54,11 @@ export interface CrmContactData {
 /** Datos de la Oportunidad (Deal) a crear. `nroSolicitud` = External ID (`EXTERNAL_ID`). */
 export interface CrmOpportunityData {
   nroSolicitud: number;
-  /** Cuenta (Account "ML") — del token, nunca del payload. */
+  /**
+   * Cuenta (Account "ML") — del token, nunca del payload. OJO: Deals **no tiene
+   * lookup a Accounts** en este CRM; la Cuenta cuelga del Contacto
+   * (`Contacts.Account_Name`). Ver `docs/reference/crm-data-model.md` (CRM-Q3).
+   */
   accountId: string;
   contactId: string;
   /** Estado fijo, fijado server-side. */

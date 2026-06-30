@@ -266,8 +266,16 @@ o con la consola/docs de Catalyst.
 - **PDF-Q1**: cuando `Analisis.pdf_url` está vacío, ¿cómo se genera el PDF? (plantilla nativa de
   Creator vs HTML→PDF en Catalyst vs servicio existente).
 - **PDF-Q2**: ¿de qué datos sale el PDF y cuál es la relación entre los forms `Informes` y `Analisis`?
-- **CRM-Q1**: API names exactos de los módulos Contacts / Deals / Accounts.
+- **CRM-Q1**: 🟢 Parcial — api_names estándar de Contacts/Deals/Accounts/Products capturados del
+  discovery del CRM ([`docs/reference/crm-data-model.md`](docs/reference/crm-data-model.md)).
+  Falta: **valores de picklist** (incl. `Stage`) vía `GET /settings/fields?module=Deals` (el
+  discovery no los trae).
 - **CRM-Q2**: ✅ Resuelto (Nestor 2026-06-30) — Stage de Deals = `Nueva Solicitud` (provisional); campos custom `Cedula` (Contacts) y `EXTERNAL_ID` (Deals) creados.
+- **CRM-Q3**: Deals **no tiene lookup a Accounts** → ¿la Cuenta "ML" cuelga sólo del Contacto
+  (`Contacts.Account_Name`) o se crea un lookup Cuenta custom en Deals?
+- **CRM-Q4**: Vehículo = lookup (`Deals.Vehiculo`→`Products`, con `Marca`/`Modelo` también lookups
+  y **sin campo de matrícula**) → ¿se modela en E-02 (resolver Products/Marcas/Modelos) o se difiere?
+- **CRM-Q5**: `Pipeline` es `system_mandatory` en Deals → ¿qué valor enviar al crear? (picklist).
 
 ### Plataforma Catalyst (de-risk antes de producción)
 
