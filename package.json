@@ -15,7 +15,8 @@
     "lint": "eslint .",
     "dev": "pnpm exec tsc -b && node --env-file-if-exists=.env scripts/dev-server.mjs",
     "smoke": "pnpm exec tsc -b && node scripts/smoke-local.mjs",
-    "smoke:catalyst": "node scripts/smoke-catalyst.mjs"
+    "smoke:catalyst": "node scripts/smoke-catalyst.mjs",
+    "zoho:check": "pnpm exec tsc -b && node --env-file-if-exists=.env scripts/zoho-crm-check.mjs"
   },
   "devDependencies": {
     "@typescript-eslint/parser": "^8.13.0",
