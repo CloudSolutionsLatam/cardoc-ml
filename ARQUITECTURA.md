@@ -31,7 +31,7 @@ nunca habla con Zoho directo ni ve una URL, fileId o ruta interna.
 | Endpoint | Scope | Qué hace | Upstream |
 |----------|-------|----------|----------|
 | `POST /v1/opportunity-contact` | `opportunities:create` | Crea/reutiliza Contacto (dedup por cédula `NroCedula`) + crea Oportunidad en estado fijo `Nueva Solicitud`. Payload plano de ML; idempotente por `NroSolicitud` (del body). | Zoho CRM (Contacts/Deals/Accounts) |
-| `GET /v1/informes` | `reports:read` | Lista los Informes de Revisión de la automotora autenticada (filtros controlados + cursor opaco). | Zoho Creator |
+| `GET /v1/informes` | `reports:read` | ⛔ **Descartado** ([ADR-0015](#adr-0015)): ML es push (outbound E-07), no pull. Ruta en mock; sin adapter Creator de listado. | — |
 | `GET /v1/informes/:id/pdf` | `reports:pdf` | Stream autenticado del PDF, sin URL pública ni ubicación interna. | Zoho Creator + WorkDrive |
 | `GET /v1/health` | — (abierto) | Health check para monitoreo de disponibilidad. | — |
 

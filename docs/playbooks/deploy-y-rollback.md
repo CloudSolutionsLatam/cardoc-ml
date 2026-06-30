@@ -254,7 +254,7 @@ Si health no responde 200, el deploy no levantó — no seguir con el resto.
 | Endpoint | Método | Scope | Headers obligatorios | Smoke esperado (modos mock/seed) |
 |----------|--------|-------|----------------------|----------------------------------|
 | `/v1/opportunity-contact` | POST | `opportunities:create` | `X-Api-Key: …`, `Content-Type: application/json` | `200/201` en éxito; mismo `NroSolicitud` + payload distinto → `409 IDEMPOTENCY_CONFLICT` |
-| `/v1/informes` | GET | `reports:read` | `X-Api-Key: …` | `200` con lista |
+| `/v1/informes` | GET | `reports:read` | `X-Api-Key: …` | ⛔ descartado (ADR-0015): ML es push; ruta solo en mock |
 | `/v1/informes/:id/pdf` | GET | `reports:pdf` | `X-Api-Key: …` | `200` stream PDF; sin PDF → `404 PDF_NOT_AVAILABLE` |
 
 ```bash

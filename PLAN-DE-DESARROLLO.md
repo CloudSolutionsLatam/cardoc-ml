@@ -30,7 +30,7 @@ paralelos. El de-risk de plataforma corre en paralelo porque no toca código.
 |-------|---------|--------|-------|:-------:|
 | **E-01** | Scaffold monorepo + hexagonal: dominio, puertos, use-cases, function Express, middlewares, mocks, CI, bundle, deploy-ready | ✅ **Completo y verificado** | Nestor | 22/06 |
 | **E-02** | Adapters reales CRM: `ZohoCrmClient` (Contacts/Deals/Accounts) + self-client OAuth + persistencia DataStore productiva | 🟢 Adapter + OAuth implementados (24 tests); falta cargar secrets + DataStore productivo | Nestor | 23–26/06 |
-| **E-03** | Adapters reales Informes: `ZohoCreatorReportsSource` + WorkDrive + flujo PDF (lazy generate + write-back) | 🟡 Puertos + lógica listos; adapter stub | Nestor | 26–30/06 |
+| **E-03** | Informes — **solo PDF** (`GET /v1/informes/:id/pdf`: `ZohoCreatorReportsSource` + WorkDrive + lazy generate/write-back). El **listado** `GET /v1/informes` quedó **descartado** ([ADR-0015](docs/decisions/README.md#adr-0015)): ML es push (outbound E-07). | 🟡 Puertos listos; adapter stub | Nestor | 26–30/06 |
 | **E-04** | Cap distribuido sobre Catalyst Cache (hoy contadores in-memory por contenedor) | ⬜ Pendiente | Nestor | 30/06–01/07 |
 | **E-05** | Hardening de seguridad + tenancy: matriz scope × endpoint, cross-tenant 404, secret-scan en verde sostenido | ⬜ Parcial (gates ya en CI) | Nestor | 01–02/07 |
 | **E-06** | Deploy a Catalyst dev + smoke e2e contra el entorno real + runbooks dry-run | ⬜ Pendiente | Nestor | 02–03/07 |

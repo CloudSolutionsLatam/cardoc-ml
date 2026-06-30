@@ -201,6 +201,11 @@ Mismo `NroSolicitud` con body distinto → `409 IDEMPOTENCY_CONFLICT`.
 
 Lista los Informes de Revisión de la **Cuenta autenticada**, con filtros controlados y cursor.
 
+> ⛔ **Descartado / no se implementa contra Creator ([ADR-0015](decisions/README.md#adr-0015)).**
+> ML es *push*: escucha los cambios vía la notificación OUTBOUND (E-07), no hace *pull* de un
+> listado. La ruta sigue en modo **mock** (valida el pipeline), pero NO hay adapter Creator de
+> listado. El PDF (§4) **sí** queda en alcance.
+
 | | |
 |---|---|
 | **Método / path** | `GET /v1/informes` |

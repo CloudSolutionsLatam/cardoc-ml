@@ -34,6 +34,7 @@ Convención: si una ADR crece o necesita discusión extensa, se separa a su prop
 | [0012](#adr-0012) | PDF: resolución perezosa con caché en Creator/WorkDrive | Aceptada (mecanismo de generación pendiente) |
 | [0013](#adr-0013) | Integración OUTBOUND a ML (CRM workflow → función Catalyst) | Aceptada |
 | [0014](#adr-0014) | Auth del consumidor por header `X-Api-Key` (Catalyst reserva `Authorization`) | Aceptada |
+| [0015](#adr-0015) | `GET /v1/informes` (listado) descartado — ML es push (outbound E-07), no pull | Aceptada |
 
 > Confirmadas por Nestor Toñanez, 2026-06-25.
 
@@ -137,3 +138,10 @@ notifica a ML (MLCenter/AutoCheck) los cambios de estado de la solicitud vía
 - **Contexto:** Catalyst **reserva el header `Authorization`** y lo valida como token OAuth de Zoho; un `Authorization: Bearer <nuestro-token>` devuelve `INVALID_TOKEN` ANTES de llegar a la función (aun con Security Rules `authentication: optional`).
 - **Consecuencia:** el token del consumidor viaja en `X-Api-Key`; `authMiddleware` lo lee de ahí. La function debe tener Security Rules `authentication: optional` (Catalyst no exige token propio) → nuestra auth (`X-Api-Key` + scope + tenancy + cap) es la protección real. Verificado en el smoke: `X-Api-Key` pasa limpio, `Authorization` lo intercepta Catalyst. Ver `apps/catalyst/functions/api/src/middleware/auth.ts`.
 - **Descartado:** `Authorization: Bearer` (lo intercepta Catalyst).
+
+## ADR-0015
+**`GET /v1/informes` (listado pull) descartado — reemplazado por la notificación OUTBOUND a ML.**
+- **Estado:** Aceptada (Nestor, 2026-06-30).
+- **Contexto:** el único consumidor es ML, que es **push**: escucha los cambios de estado vía la notificación OUTBOUND (E-07, endpoint AutoCheck `estado/actualizar`, [ADR-0013](#adr-0013)). No hace *pull* de un listado de informes.
+- **Consecuencia:** `GET /v1/informes` (consulta normalizada, filtros, paginación) **no se implementa** contra Creator; E-03 se reduce al **PDF** (`GET /v1/informes/:id/pdf`), candidato a target del `LinkResultado` enviado a ML ([OQ-N7](../OPEN-QUESTIONS.md)). La ruta sigue cableada en modo **mock** (valida el pipeline de middlewares), sin adapter Creator de listado.
+- **Descartado:** exponer un listado/consulta *pull* al consumidor.

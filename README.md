@@ -11,7 +11,7 @@ API en **Zoho Catalyst** (Advanced I/O) para automotoras. Tres endpoints `/v1`:
 | Endpoint | Scope | Qué hace |
 |----------|-------|----------|
 | `POST /v1/opportunity-contact` | `opportunities:create` | Crea/reutiliza Contacto (dedup por cédula) + crea Oportunidad `Nueva Solicitud` en **Zoho CRM** (Deals/Accounts). Payload plano de ML; idempotente por `NroSolicitud`. |
-| `GET /v1/informes` | `reports:read` | Lista los Informes de Revisión de la automotora autenticada (filtros controlados + cursor). Fuente: **Zoho Creator**. |
+| `GET /v1/informes` | `reports:read` | ⛔ **Descartado** ([ADR-0015](docs/decisions/README.md#adr-0015)): ML es push (outbound E-07), no pull. |
 | `GET /v1/informes/{id}/pdf` | `reports:pdf` | Stream autenticado del PDF, sin URL pública ni ubicación interna. |
 
 > **Estado: E-01 completo y deployable.** Verde verificado: `tsc -b`, 7 tests (vitest),
