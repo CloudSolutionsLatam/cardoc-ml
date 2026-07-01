@@ -26,8 +26,8 @@ import {
   type TokensRepository,
 } from "@cardoc/persistence";
 import {
+  createPublicImageFetcher,
   createReportDetailFetcher,
-  createWorkDriveImageFetcher,
   MockCrmClient,
   MockMlCenterClient,
   MockReportsSource,
@@ -149,13 +149,17 @@ async function resolveZohoAccessToken(catalystApp: unknown): Promise<string> {
 function resolveCreatorConnection(catalystApp: unknown): CreatorConnection {
   let tokenPromise: Promise<string> | undefined;
   return {
+    // Endpoint URL de la Custom API (con la public key embebida), copiado VERBATIM de la consola.
+    // La key vive SOLO acá (Environment Variables), nunca en el repo.
     reportDetailUrl: process.env["CREATOR_REPORT_DETAIL_URL"] ?? "",
-    publicKey: process.env["CREATOR_PUBLIC_KEY"] ?? "",
+    // "publickey" (default) hoy; "oauth" a futuro (reconfigurar la Custom API + self-client del CRM).
+    authMode: process.env["CREATOR_AUTH_MODE"] === "oauth" ? "oauth" : "publickey",
+    // Mismo gestor de tokens que el CRM (self-client). Solo se usa en authMode "oauth".
     getAccessToken: () => (tokenPromise ??= resolveZohoAccessToken(catalystApp)),
   };
 }
 
-/** Arma el adapter Creator real con los fetchers HTTP (report detail + fotos de WorkDrive). */
+/** Arma el adapter Creator real: report detail (Custom API REST) + fotos públicas de WorkDrive. */
 function buildCreatorReports(conn: CreatorConnection): ReportsSource {
   const generatedAt = new Date().toLocaleString("es-UY", {
     day: "2-digit",
@@ -166,7 +170,7 @@ function buildCreatorReports(conn: CreatorConnection): ReportsSource {
   });
   return new ZohoCreatorReportsSource({
     fetchReportDetail: createReportDetailFetcher(conn),
-    fetchImage: createWorkDriveImageFetcher(conn),
+    fetchImage: createPublicImageFetcher(),
     generatedAt,
   });
 }

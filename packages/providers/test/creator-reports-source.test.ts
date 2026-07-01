@@ -98,8 +98,7 @@ describe("ZohoCreatorReportsSource.openPdf", () => {
 
 describe("createReportDetailFetcher — manejo robusto del HTTP", () => {
   const conn: CreatorConnection = {
-    reportDetailUrl: "https://creator.example/api/detail",
-    publicKey: "pk",
+    reportDetailUrl: "https://creator.example/api/detail?publickey=pk",
     getAccessToken: async () => "tok",
   };
   const fakeRes = (init: { ok: boolean; status: number; json: () => Promise<unknown> }) =>
@@ -131,6 +130,47 @@ describe("createReportDetailFetcher — manejo robusto del HTTP", () => {
     const fetcher = createReportDetailFetcher(conn, async () => {
       throw new Error("ECONNREFUSED");
     });
+    await expect(fetcher("#R-1", "ml")).rejects.toBeInstanceOf(UpstreamError);
+  });
+
+  it("modo publickey: preserva la key de la URL de consola y agrega id + portalType (sin Authorization)", async () => {
+    const base = "https://www.zohoapis.com/creator/custom/acme/GET_INSPECTION_REPORT_DETAIL?publickey=PK123";
+    let called = "";
+    let hadAuth = true;
+    const fetcher = createReportDetailFetcher(
+      { reportDetailUrl: base, getAccessToken: async () => "t" },
+      async (u, init) => {
+        called = String(u);
+        hadAuth = Boolean((init?.headers as Record<string, string>)?.["Authorization"]);
+        return fakeRes({ ok: true, status: 200, json: async () => ({ code: 3000, result: {} }) });
+      },
+    );
+    await fetcher("#R-9", "ml");
+    expect(called).toContain("/creator/custom/acme/GET_INSPECTION_REPORT_DETAIL");
+    expect(called).toContain("id=%23R-9"); // '#' url-encoded
+    expect(called).toContain("portalType=ml");
+    expect(called).toContain("publickey=PK123"); // la key de la consola se preserva
+    expect(hadAuth).toBe(false); // publickey NO manda header OAuth
+  });
+
+  it("modo oauth: agrega Authorization: Zoho-oauthtoken con el token del self-client", async () => {
+    let authHeader = "";
+    const fetcher = createReportDetailFetcher(
+      { reportDetailUrl: "https://www.zohoapis.com/creator/custom/acme/GET_INSPECTION_REPORT_DETAIL", authMode: "oauth", getAccessToken: async () => "TKN-999" },
+      async (_u, init) => {
+        authHeader = ((init?.headers as Record<string, string>) ?? {})["Authorization"] ?? "";
+        return fakeRes({ ok: true, status: 200, json: async () => ({ code: 3000, result: {} }) });
+      },
+    );
+    await fetcher("#R-9", "ml");
+    expect(authHeader).toBe("Zoho-oauthtoken TKN-999");
+  });
+
+  it("reportDetailUrl ausente/ inválida → UpstreamError (no URL crudo)", async () => {
+    const fetcher = createReportDetailFetcher(
+      { reportDetailUrl: "", getAccessToken: async () => "t" },
+      async () => fakeRes({ ok: true, status: 200, json: async () => ({}) }),
+    );
     await expect(fetcher("#R-1", "ml")).rejects.toBeInstanceOf(UpstreamError);
   });
 });

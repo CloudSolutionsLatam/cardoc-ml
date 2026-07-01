@@ -26,34 +26,53 @@ export interface CreatorEnvelope {
 export type ReportDetailFetcher = (id: string, portalType: string) => Promise<CreatorEnvelope>;
 
 /**
- * Config de conexión a Creator/WorkDrive (Environment Variables). ⚠️ Los valores exactos
- * (URL REST de la Custom API, si aplica `public_key` u OAuth, dominio de descarga de WorkDrive)
- * se confirman con el admin de Creator antes de activar `CARDOC_REPORTS_MODE=creator`.
+ * Config de conexión a Creator (Environment Variables). Formato de la Custom API REST **verificado
+ * en vivo (2026-07-01)** contra el endpoint real de cardoc:
+ *   `https://www.zohoapis.com/creator/custom/cardoc/GET_INSPECTION_REPORT_DETAIL?publickey=<clave>&id=..&portalType=ml`
+ * (sin segmento de versión; auth **Public Key** = param `publickey` en la URL — probado: sin key →
+ * 401; con key → la API procesa; no requiere token de sesión). El "Endpoint URL" (con la key) se
+ * copia VERBATIM de la consola a `CREATOR_REPORT_DETAIL_URL` (una sola var; la key NO va en el repo).
+ *
+ * `authMode`: hoy **publickey** (la key viaja en la URL). A futuro **oauth** — reconfigurar la Custom
+ * API a OAuth2 y usar el MISMO self-client de tokens que el CRM (`getAccessToken`).
  */
 export interface CreatorConnection {
-  /** ⚠️ URL REST de `GET_INSPECTION_REPORT_DETAIL` server-to-server. */
+  /** Endpoint URL de la Custom API, VERBATIM de la consola (en modo publickey ya incluye `?publickey=...`).
+   *  cardoc-ml le agrega `id` + `portalType`. */
   reportDetailUrl: string;
-  /** ⚠️ public_key de la Custom API (si el acceso server-to-server la usa). */
-  publicKey: string;
-  /** OAuth (self-client) para descargar archivos de WorkDrive. */
+  /** "publickey" (default; la key va en la URL) | "oauth" (Authorization con el self-client del CRM). */
+  authMode?: "publickey" | "oauth";
+  /** Access token OAuth (self-client — el MISMO gestor que el CRM). Solo se usa en `authMode: "oauth"`. */
   getAccessToken(): Promise<string>;
 }
 
 /**
- * Fetcher REST del detalle del informe. ⚠️ Arma la URL con los params documentados en §5.1
- * (`id`, `portalType`, `publickey`); el `token` de sesión de portal NO aplica server-to-server
- * (a confirmar con qué se reemplaza). Config-driven — no hay URL hardcodeada.
+ * Fetcher REST del detalle del informe. Reproduce lo que hace `invokeCustomApi` del portal, pero
+ * server-to-server: GET a la Custom API con `id` + `portalType`. Auth por `authMode`: publickey (en
+ * la URL) u oauth (header `Zoho-oauthtoken`, mismo self-client del CRM). Config-driven, sin URL hardcodeada.
  */
 export function createReportDetailFetcher(conn: CreatorConnection, fetchFn: FetchFn = fetch): ReportDetailFetcher {
   return async (id, portalType) => {
-    const q = new URLSearchParams({ id, portalType });
-    if (conn.publicKey) q.set("publickey", conn.publicKey);
+    let url: URL;
+    try {
+      url = new URL(conn.reportDetailUrl);
+    } catch {
+      throw new UpstreamError("creator", 502, "CREATOR_REPORT_DETAIL_URL ausente o inválida");
+    }
+    url.searchParams.set("id", id);
+    url.searchParams.set("portalType", portalType);
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (conn.authMode === "oauth") {
+      // OAuth2: mismo gestor de tokens que el CRM (self-client). Requiere la Custom API en modo OAuth.
+      try {
+        headers["Authorization"] = `Zoho-oauthtoken ${await conn.getAccessToken()}`;
+      } catch (e) {
+        throw new UpstreamError("creator", 502, `token OAuth Creator: ${(e as Error).message}`);
+      }
+    }
     let res: Awaited<ReturnType<FetchFn>>;
     try {
-      res = await fetchFn(`${conn.reportDetailUrl}?${q.toString()}`, {
-        method: "GET",
-        headers: { "Content-Type": "application/json" },
-      });
+      res = await fetchFn(url.toString(), { method: "GET", headers });
     } catch (e) {
       // Rechazo de red (DNS/ECONNREFUSED/timeout) → 502, no un Error crudo (que daría 500 opaco).
       throw new UpstreamError("creator", 502, `GET_INSPECTION_REPORT_DETAIL red: ${(e as Error).message}`);
@@ -73,15 +92,14 @@ export function createReportDetailFetcher(conn: CreatorConnection, fetchFn: Fetc
 }
 
 /**
- * Fetcher de imágenes de WorkDrive (para embeber fotos en el PDF). GET autenticado con OAuth;
- * degrada a `null` ante cualquier fallo (el informe se genera igual, con placeholder). ⚠️ el
- * mecanismo de descarga exacto de WorkDrive (URL directa vs API `/files/{id}/content`) se confirma.
+ * Fetcher de imágenes para embeber fotos en el PDF. Las URLs de las fotos son **públicas** (Nestor
+ * 2026-07-01) → GET sin auth. Degrada a `null` ante cualquier fallo (el informe se genera igual,
+ * con placeholder). No necesita OAuth.
  */
-export function createWorkDriveImageFetcher(conn: CreatorConnection, fetchFn: FetchFn = fetch): ImageFetcher {
+export function createPublicImageFetcher(fetchFn: FetchFn = fetch): ImageFetcher {
   return async (url) => {
     try {
-      const token = await conn.getAccessToken();
-      const res = await fetchFn(url, { headers: { Authorization: `Zoho-oauthtoken ${token}` } });
+      const res = await fetchFn(url);
       if (!res.ok) return null;
       return new Uint8Array(await res.arrayBuffer());
     } catch {
