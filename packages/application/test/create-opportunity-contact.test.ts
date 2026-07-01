@@ -112,3 +112,30 @@ describe("Recuperación de error transitorio", () => {
     if (second.status === "created") expect(second.reusedContact).toBe(true);
   });
 });
+
+describe("Idempotencia concurrente (AC-08) — dos POST simultáneos con la misma clave", () => {
+  it("exactamente 1 created; el otro corta en 'in_progress' sin tocar el CRM (nunca 2 Oportunidades)", async () => {
+    // Gate del plan §7. La red física es el UNIQUE(idempotency_key) del DataStore
+    // (OQ-P8/CAT-Q3, consola); acá se prueba la LÓGICA: el primero siembra el row y ejecuta
+    // el efecto, el segundo ve el 'pending' y devuelve in_progress SIN crear un segundo Deal.
+    let oppCreates = 0; // altas reales en el CRM (createOpportunity efectivamente invocado)
+    const base = new MockCrmClient();
+    const crm: CrmClient = {
+      findContactByCedula: (c, conn) => base.findContactByCedula(c, conn),
+      createContact: (data, conn) => base.createContact(data, conn),
+      createOpportunity: (data, conn) => {
+        oppCreates += 1;
+        return base.createOpportunity(data, conn);
+      },
+    };
+    const d = { opportunities: new InMemoryOpportunitiesRepository(), crm, connection };
+    const [a, b] = await Promise.all([
+      createOpportunityContact(input, ctxH, d),
+      createOpportunityContact(input, ctxH, d),
+    ]);
+    const statuses = [a.status, b.status];
+    expect(statuses.filter((s) => s === "created")).toHaveLength(1);
+    expect(statuses).toContain("in_progress");
+    expect(oppCreates).toBe(1); // el efecto externo corrió una sola vez
+  });
+});

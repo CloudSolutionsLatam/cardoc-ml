@@ -32,7 +32,7 @@ paralelos. El de-risk de plataforma corre en paralelo porque no toca código.
 | **E-02** | Adapters reales CRM: `ZohoCrmClient` (Contacts/Deals/Accounts) + self-client OAuth + persistencia DataStore productiva | 🟢 Adapter + OAuth implementados (24 tests); falta cargar secrets + DataStore productivo | Nestor | 23–26/06 |
 | **E-03** | Informes — **solo PDF** (`GET /v1/informes/:id/pdf`: `ZohoCreatorReportsSource` + WorkDrive + lazy generate/write-back). El **listado** `GET /v1/informes` quedó **descartado** ([ADR-0015](docs/decisions/README.md#adr-0015)): ML es push (outbound E-07). | 🟡 Puertos listos; adapter stub | Nestor | 26–30/06 |
 | **E-04** | Cap distribuido sobre Catalyst Cache (hoy contadores in-memory por contenedor) | ⬜ Pendiente | Nestor | 30/06–01/07 |
-| **E-05** | Hardening de seguridad + tenancy: matriz scope × endpoint, cross-tenant 404, secret-scan en verde sostenido | ⬜ Parcial (gates ya en CI) | Nestor | 01–02/07 |
+| **E-05** | Hardening de seguridad + tenancy: matriz scope × endpoint, cross-tenant 404, secret-scan en verde sostenido | 🟡 Gates de fitness con tests unitarios (matriz scope×endpoint, A→B=404, idempotencia concurrente); falta cerrarlos contra adapters/DataStore reales | Nestor | 01–02/07 |
 | **E-06** | Deploy a Catalyst dev + smoke e2e contra el entorno real + runbooks dry-run | ⬜ Pendiente | Nestor | 02–03/07 |
 | **QA** | Transversal: gates de CI verdes en cada push, smoke post-deploy | 🟡 Continuo | Nestor | 22/06–03/07 |
 
@@ -175,8 +175,10 @@ El criterio: cada AC tiene un test que lo viola si se rompe. Los gates corren en
 |-------|-----------|--------|--------------|
 | **Unit (dominio)** | `payloadFingerprint` determinístico/insensible al orden; `hashToken` estable y no reversible | ✅ 3 tests | CI, cada push |
 | **Use-cases** | `createOpportunityContact`: crea / duplicate / conflict / idempotencia por tenant (AC-08) | ✅ 4 tests | CI, cada push |
-| **Contract (adapters)** | Cada adapter Zoho contra sandbox/entorno real | ⬜ Pendiente (E-02/E-03) — `packages/providers` hoy `passWithNoTests` | CI nightly + pre-release |
-| **Integración (repos)** | Repos DataStore reales, auth, idempotencia física, scope cruzado | ⬜ Pendiente (E-02) — `packages/persistence` hoy `passWithNoTests` | CI, cada push (tras E-02) |
+| **Unit (fakes persistencia)** | `packages/persistence`: tenancy account-scoped, `insertIfAbsent` concurrente (nunca 2 altas), transiciones de estado, auditoría append-only | ✅ 16 tests (E-05) | CI, cada push |
+| **Unit (seguridad función)** | `@cardoc/fn-api`: matriz scope×endpoint (403), mapeo de errores (404/502 con etiqueta opaca), shared-secret interno, correlación | ✅ 19 tests (E-05) | CI, cada push |
+| **Contract (adapters)** | Cada adapter Zoho contra sandbox/entorno real | 🟡 `packages/providers` con 10 tests unitarios del `ZohoCrmClient`; contract contra sandbox/real aún pendiente | CI nightly + pre-release |
+| **Integración (repos)** | Repos DataStore reales, auth, idempotencia física, scope cruzado | ⬜ Pendiente (E-02) — los fakes ya cubren la lógica (ver Unit); falta el DataStore real | CI, cada push (tras E-02) |
 | **Smoke e2e** | Thin-slice del POST end-to-end (in-memory + Mock CRM) — smoke local 21/21 en verde | ✅ E-01 | Cada push + post-deploy |
 | **Lint (fronteras)** | eslint que prohíbe `fetch`/HTTP fuera de `packages/providers` y el SDK fuera de la capa function | ✅ | CI, cada push |
 | **Secret-scan** | gitleaks sobre la historia completa (`fetch-depth: 0`), binario directo (sin licencia del wrapper) | ✅ Gate | CI, cada push |
@@ -185,15 +187,19 @@ El criterio: cada AC tiene un test que lo viola si se rompe. Los gates corren en
 
 | Gate | Qué prueba | Resultado esperado |
 |------|-----------|--------------------|
-| **A → B = 404** | Token de Cuenta A pide un informe/PDF de Cuenta B | 404 (no 403, no 200) — AC-10 |
-| **Idempotencia concurrente** | Dos POST simultáneos con misma `idempotency_key` (mismo tenant) | 1 creado + 1 duplicate; nunca 2 Oportunidades — AC-08 |
-| **Matriz scope × endpoint** | Cada token con scope insuficiente contra cada endpoint protegido | 403 `FORBIDDEN_SCOPE` (no 404, no 200) — AC-10 vs scope |
+| **A → B = 404** | Token de Cuenta A pide un informe/PDF de Cuenta B | 404 (no 403, no 200) — AC-10 · ✅ test lógico (`streamReportPdf`→`ReportNotFoundError`; `errorMiddleware`→404 NOT_FOUND) |
+| **Idempotencia concurrente** | Dos POST simultáneos con misma `idempotency_key` (mismo tenant) | 1 creado + 1 in_progress; nunca 2 Oportunidades — AC-08 · ✅ test lógico (`persistence` + use-case) |
+| **Matriz scope × endpoint** | Cada token con scope insuficiente contra cada endpoint protegido | 403 `FORBIDDEN_SCOPE` (no 404, no 200) — AC-10 vs scope · ✅ test unitario (`requireScope`, 3×3) |
 | **Secret-scan** | Repo + historia | Cero hallazgos |
 
-> La idempotencia concurrente (sobre `UNIQUE(idempotency_key)`) y el A→B=404 **reales** se cierran contra el DataStore (E-02) y los
-> adapters (E-03); en E-01 están cubiertos a nivel de lógica/use-case con fakes. El UNIQUE del
-> DataStore es la red física: ⚠️ verificar (docs oficiales/consola) el comportamiento exacto del
-> `insertRow` ante violación de UNIQUE concurrente antes de declarar el gate cerrado.
+> Los tres gates de fitness ya tienen **tests unitarios a nivel de lógica** (E-05):
+> `packages/persistence/test/memory.test.ts`, `packages/application/test/informes.test.ts` +
+> `create-opportunity-contact.test.ts`, `apps/catalyst/functions/api/test/security-middleware.test.ts`.
+> Lo que **falta** es cerrarlos contra plataforma: la idempotencia concurrente **real** (sobre
+> `UNIQUE(idempotency_key)`) y el A→B=404 **real** se validan contra el DataStore (E-02) y los
+> adapters (E-03). El UNIQUE del DataStore es la red física: ⚠️ verificar (docs oficiales/consola)
+> el comportamiento exacto del `insertRow` ante violación de UNIQUE concurrente antes de declarar
+> el gate cerrado end-to-end.
 
 ---
 

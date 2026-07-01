@@ -28,8 +28,8 @@ producto **AutoCheck** = inspecciones de vehículos), con quien la integración 
 estado). Detalle: [`../ARQUITECTURA.md`](../ARQUITECTURA.md) · integración:
 [`playbooks/integracion-mlcenter.md`](playbooks/integracion-mlcenter.md).
 
-> **Estado (2026-06-25): E-01 completo y deployable.** Verde verificado: `tsc -b`,
-> `eslint`, bundle esbuild, suite local 25 tests + smoke local 21/21. Alta real validada
+> **Estado (2026-07-01): E-01 completo y deployable.** Verde verificado: `tsc -b`,
+> `eslint`, bundle esbuild, suite local 68 tests + smoke local 21/21. Alta real validada
 > en Catalyst (DataStore + Zoho) vía `scripts/smoke-catalyst-crm.mjs` → 5/5. La lógica de
 > E-02/E-03 (use-cases + puertos) está construida; `ZohoCrmClient` (CRM) **implementado**
 > (E-02) y el **DataStore productivo** operativo, mientras `ZohoCreatorReportsSource` (E-03)

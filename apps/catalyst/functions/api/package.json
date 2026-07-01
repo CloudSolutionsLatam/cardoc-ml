@@ -6,6 +6,7 @@
   "main": "index.js",
   "scripts": {
     "typecheck": "tsc -b",
+    "test": "vitest run",
     "build": "tsc -b && node ../../../../scripts/bundle-function.mjs api",
     "deploy:prep": "node ../../../../scripts/deploy-prep-sdk.mjs",
     "predeploy": "pnpm build && pnpm deploy:prep"
@@ -22,6 +23,7 @@
     "@types/express": "^4.17.21",
     "@types/node": "^24.0.0",
     "esbuild": "^0.21.5",
-    "typescript": "5.4.5"
+    "typescript": "5.4.5",
+    "vitest": "^1.6.0"
   }
 }
