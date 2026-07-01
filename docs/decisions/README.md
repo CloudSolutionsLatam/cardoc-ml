@@ -130,13 +130,24 @@ external es `zcatalyst-sdk-node`.
 - **Descartado:** bloquear E-01 hasta tener Cache.
 
 ## ADR-0012
-**PDF: resolución perezosa con caché en Creator/WorkDrive.** Leer `Analisis.pdf_url` → si
-lleno (link WorkDrive) stream; si vacío → generar el PDF en Catalyst → write-back a
-`Analisis.pdf_url` → stream.
-- **Estado:** Aceptada — el **mecanismo de generación** está pendiente ([OQ-N1](../OPEN-QUESTIONS.md)).
-- **Contexto:** confirmado por Nestor; el PDF puede no existir aún al pedirlo.
-- **Consecuencia:** la lógica vive en `ReportsSource.openPdf` (adapter); el handler ya pipea sin exponer URL/ruta interna. Ver `packages/providers/src/reports-source.ts`.
-- **Descartado:** asumir que el PDF siempre existe / servir el link de WorkDrive directo al consumidor.
+**PDF: resolución perezosa con caché + generación en Catalyst con pdf-lib.** Leer
+`Analisis.pdf_url` → si lleno (link WorkDrive) stream; si vacío → **generar el PDF en Catalyst
+con pdf-lib** → write-back a `Analisis.pdf_url` → stream.
+- **Estado:** Aceptada. Flujo perezoso confirmado por Nestor. **Motor de generación decidido
+  (2026-07-01): pdf-lib** (librería JS pura, en Catalyst), detrás del puerto `PdfGenerator`.
+  Layout **provisional** (iterable); el **read desde Creator** (`Analisis`) y el **write-back**
+  siguen pendientes (E-03).
+- **Contexto:** confirmado por Nestor; el PDF puede no existir aún al pedirlo. Generarlo es la
+  parte "difícil y pesada"; el read/caché es secundario. Hoy hay una sola Cuenta "ML" → el 404
+  cross-tenant no aplica en la práctica aún (pero la tenancy en `openPdf` se mantiene).
+- **Consecuencia:** la generación vive detrás de `PdfGenerator` (`packages/providers/src/pdf-generator.ts`,
+  impl `PdfLibReportGenerator`), usada por `ReportsSource.openPdf`; el handler ya pipea sin
+  exponer URL/ruta interna. pdf-lib se **inlina** en el bundle (no external): +~1.5 MB
+  (index.js ≈ 2.3 MB) — trade-off aceptable, sin binario pesado ni upstream. Swappeable a otro
+  motor (Zoho Writer, @react-pdf) sin tocar el resto.
+- **Descartado:** Chromium/Puppeteer headless (binario ~300 MB, cold-start/bundle riesgosos en
+  Advanced I/O); Zoho Writer Merge para el arranque (suma upstream/auth/round-trip — queda como
+  alternativa del puerto); asumir que el PDF siempre existe / servir el link de WorkDrive directo.
 
 ## ADR-0013
 **Integración OUTBOUND a ML: CRM workflow → función Catalyst → `MlCenterClient`.** cardoc

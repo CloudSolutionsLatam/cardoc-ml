@@ -11,7 +11,8 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@cardoc/domain": "workspace:*"
+    "@cardoc/domain": "workspace:*",
+    "pdf-lib": "^1.17.1"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",

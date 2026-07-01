@@ -9,6 +9,7 @@
 import type { InformeRevision, ListInformesQuery, Page } from "@cardoc/domain";
 import { Readable } from "node:stream";
 import { NotImplementedError, ReportNotFoundError } from "./errors";
+import { PdfLibReportGenerator, type PdfGenerator } from "./pdf-generator";
 
 /** Resultado del stream del PDF: el `Readable` se pipea directo al `res` de Express. */
 export interface ReportPdf {
@@ -25,8 +26,14 @@ export interface ReportsSource {
   openPdf(accountId: string, id: string): Promise<ReportPdf>;
 }
 
-/** Mock con datos de muestra, para dev/test y para que los GET respondan en local. */
+/**
+ * Fuente de informes de muestra para dev/test. `openPdf` genera un PDF **real** (pdf-lib) a
+ * partir de los datos de muestra — el read desde Creator (`Analisis`) se cablea en E-03; la
+ * generación ya es real y streameable. El listado sigue siendo data de muestra.
+ */
 export class MockReportsSource implements ReportsSource {
+  constructor(private readonly pdfGenerator: PdfGenerator = new PdfLibReportGenerator()) {}
+
   private sample(accountId: string): InformeRevision[] {
     return [
       { id: `${accountId}-INF-001`, estado: "completado", matricula: "ABC1234", vehiculo: "VW Amarok 2018", cliente: "Cliente Demo", fecha: "2026-06-20", pdfDisponible: true },
@@ -53,10 +60,15 @@ export class MockReportsSource implements ReportsSource {
   async openPdf(accountId: string, id: string): Promise<ReportPdf> {
     const informe = await this.findById(accountId, id);
     if (!informe) {
-      throw new ReportNotFoundError(id);
+      throw new ReportNotFoundError(id); // no existe / de otra Cuenta → 404 (tenancy)
     }
-    const pdf = Buffer.from(`%PDF-1.4\n% Mock PDF para ${id}\n`, "utf8");
-    return { stream: Readable.from(pdf), contentType: "application/pdf", filename: `informe-${id}.pdf` };
+    // Generación perezosa: hoy se genera siempre (el read de Analisis.pdf_url + caché es E-03).
+    const bytes = await this.pdfGenerator.generate(informe);
+    return {
+      stream: Readable.from(Buffer.from(bytes)),
+      contentType: "application/pdf",
+      filename: `informe-${id}.pdf`,
+    };
   }
 }
 

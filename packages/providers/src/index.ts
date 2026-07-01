@@ -7,4 +7,5 @@
 export * from "./errors";
 export * from "./crm-client";
 export * from "./reports-source";
+export * from "./pdf-generator";
 export * from "./mlcenter-client";
