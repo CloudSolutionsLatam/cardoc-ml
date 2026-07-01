@@ -6,7 +6,7 @@
  * lleno → stream desde WorkDrive; si vacío → generar el PDF en Catalyst, guardar el
  * link en `Analisis.pdf_url` y luego stream. El consumidor NUNCA ve la URL/ubicación.
  */
-import type { InformeRevision, ListInformesQuery, Page } from "@cardoc/domain";
+import type { InformeReport, InformeRevision, ListInformesQuery, Page } from "@cardoc/domain";
 import { Readable } from "node:stream";
 import { NotImplementedError, ReportNotFoundError } from "./errors";
 import { PdfLibReportGenerator, type PdfGenerator } from "./pdf-generator";
@@ -62,12 +62,89 @@ export class MockReportsSource implements ReportsSource {
     if (!informe) {
       throw new ReportNotFoundError(id); // no existe / de otra Cuenta → 404 (tenancy)
     }
-    // Generación perezosa: hoy se genera siempre (el read de Analisis.pdf_url + caché es E-03).
-    const bytes = await this.pdfGenerator.generate(informe);
+    // Generación perezosa: hoy se genera siempre (el read real de Analisis + caché es E-03).
+    // Se arma un InformeReport de MUESTRA (los datos ricos vienen de Creator al cablear E-03).
+    const bytes = await this.pdfGenerator.generate(this.sampleReport(informe));
     return {
       stream: Readable.from(Buffer.from(bytes)),
       contentType: "application/pdf",
       filename: `informe-${id}.pdf`,
+    };
+  }
+
+  /** Informe rico de muestra a partir del ítem liviano (stand-in del read de Creator, E-03). */
+  private sampleReport(informe: InformeRevision): InformeReport {
+    // Parse robusto del string de muestra ("VW Amarok 2018", "Toyota Land Cruiser 2020"):
+    // año = último token si es 4 dígitos; marca = primero; modelo = lo del medio.
+    const tokens = (informe.vehiculo ?? "").split(" ").filter(Boolean);
+    const anio = tokens.length && /^\d{4}$/.test(tokens[tokens.length - 1] ?? "") ? (tokens.pop() as string) : "";
+    const marca = tokens.shift() ?? "";
+    const modelo = tokens.join(" ");
+    const det = (
+      id: number,
+      seccionId: number,
+      tituloJerarquico: string,
+      estado: InformeReport["detalles"][number]["estado"],
+      extra: Partial<InformeReport["detalles"][number]> = {},
+    ): InformeReport["detalles"][number] => ({
+      id,
+      componenteId: `c${id}`,
+      seccionId,
+      titulo: tituloJerarquico,
+      subtitulo: "",
+      tituloJerarquico,
+      estado,
+      descripcion: null,
+      imagenes: [],
+      audioData: [],
+      videoData: [],
+      pdfData: [],
+      nota: null,
+      aiSummary: null,
+      ...extra,
+    });
+    return {
+      id: informe.id,
+      reportCode: informe.id,
+      recomendaciones:
+        "Realizar service de mantenimiento en los próximos 1.000 km y revisar el desgaste de pastillas de freno delanteras.",
+      vehiculo: {
+        marca,
+        modelo,
+        año: anio,
+        placa: informe.matricula ?? "Sin matrícula",
+        kilometraje: "90.000 km",
+        motor: "2.0 TDI",
+        transmision: "Automática",
+        imagen: "",
+      },
+      cliente: { nombre: informe.cliente ?? "", telefono: "099 123 456" },
+      fechaInspeccion: informe.fecha ?? "",
+      inspector: { nombre: "Inspector Demo", cargo: "Inspector @ AutoCheck", telefono: "", avatar: "", iniciales: "ID" },
+      resumenAudio: null,
+      resumenTranscripcion:
+        "El vehículo se encuentra en buen estado general. Se detectaron observaciones menores en el tren delantero y una fuga leve de aceite sin criticidad.",
+      score: 8,
+      score_comentario: "Buen estado general, con observaciones menores no críticas.",
+      secciones: [
+        { id: 1, titulo: "Chasis", completada: true, activa: true },
+        { id: 2, titulo: "Mecánica", completada: true, activa: false },
+      ],
+      detalles: [
+        det(1, 1, "Chasis - Frente - Larguero delantero izquierdo", "aprobado", {
+          descripcion: "Sin deformaciones ni signos de reparación estructural.",
+        }),
+        det(2, 1, "Chasis - Piso - Zona de anclaje", "observacion", {
+          descripcion: "Óxido superficial incipiente en la zona de anclaje.",
+          nota: "Tratar con antióxido en el próximo service.",
+          aiSummary: "Corrosión superficial no estructural; monitorear evolución.",
+        }),
+        det(3, 2, "Mecánica - Motor - Sellos y juntas", "critico", {
+          descripcion: "Fuga de aceite en la tapa de válvulas.",
+          aiSummary: "Fuga activa; requiere reemplazo de junta a corto plazo.",
+          audioData: [{ type: "audio", resource: "wd://audio/1" }],
+        }),
+      ],
     };
   }
 }

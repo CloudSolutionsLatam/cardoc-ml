@@ -133,10 +133,15 @@ external es `zcatalyst-sdk-node`.
 **PDF: resolución perezosa con caché + generación en Catalyst con pdf-lib.** Leer
 `Analisis.pdf_url` → si lleno (link WorkDrive) stream; si vacío → **generar el PDF en Catalyst
 con pdf-lib** → write-back a `Analisis.pdf_url` → stream.
-- **Estado:** Aceptada. Flujo perezoso confirmado por Nestor. **Motor de generación decidido
-  (2026-07-01): pdf-lib** (librería JS pura, en Catalyst), detrás del puerto `PdfGenerator`.
-  Layout **provisional** (iterable); el **read desde Creator** (`Analisis`) y el **write-back**
-  siguen pendientes (E-03).
+- **Estado:** Aceptada. Flujo perezoso confirmado por Nestor. **Motor: pdf-lib** (JS puro, en
+  Catalyst), detrás del puerto `PdfGenerator`. **cardoc-ml es el GENERADOR ÚNICO del PDF**
+  (Nestor 2026-07-01): reemplaza el `window.print()` del portal y su pdf-backend Chromium. Se
+  **reconstruye el informe REAL** (contrato de datos, reglas y layout del portal —
+  `docs/reference/pdf-backend/planning.md`): `transformReportData` portado a Node
+  (`report-transform.ts`) + `InformeReport` (dominio) + layout fiel en pdf-lib. Reconstrucción
+  **fiel en contenido/estructura, no pixel-1:1** (pdf-lib no tiene CSS). Pendiente (E-03): el
+  **read real desde Creator** (`Analisis`), el **write-back** y el **embebido de fotos** (vía
+  `ImageFetcher` con auth de WorkDrive) — hoy `MockReportsSource` arma un `InformeReport` de muestra.
 - **Contexto:** confirmado por Nestor; el PDF puede no existir aún al pedirlo. Generarlo es la
   parte "difícil y pesada"; el read/caché es secundario. Hoy hay una sola Cuenta "ML" → el 404
   cross-tenant no aplica en la práctica aún (pero la tenancy en `openPdf` se mantiene).

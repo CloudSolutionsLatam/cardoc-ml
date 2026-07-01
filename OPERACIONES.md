@@ -253,10 +253,12 @@ suposición; se de-riskean en E-03 con validación en consola/docs oficiales.
 
 **Negocio (E-03) — no inventar, definir con el cliente:**
 
-- **Generación de PDF**: cuando `Analisis.pdf_url` está vacío hay que generar el PDF en
-  Catalyst y hacer write-back a `Analisis.pdf_url` → luego stream. Falta definir el
-  generador (plantilla nativa de Creator vs HTML→PDF en Catalyst vs servicio existente) y
-  de qué datos sale. Relación entre los forms `Informes` y `Analisis` en Creator.
+- **Generación de PDF**: ✅ **resuelto e implementado** — motor **pdf-lib en Catalyst**
+  ([ADR-0012](decisions/README.md#adr-0012)); cardoc-ml es el **generador único** y reconstruye
+  el informe real (contrato/reglas/layout del portal) de forma fiel. **Pendiente (E-03):** el
+  **read real desde Creator** (`Analisis`), el **write-back** a `Analisis.pdf_url` y el
+  **embebido de fotos** de WorkDrive — hoy los datos ricos son de muestra. Relación entre los
+  forms `Informes` y `Analisis` en Creator (OQ-N2).
 - **CRM**: ✅ **resuelto y validado end-to-end** (E-02) — alta real en Catalyst
   (DataStore+Zoho) con `ZohoCrmClient` implementado. Stage de la Deal = `Nueva Solicitud`;
   campos custom `Cedula` y `EXTERNAL_ID` creados; idempotencia Capa 1 (`X-Idempotency-Key`)
