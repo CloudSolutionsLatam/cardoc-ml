@@ -58,7 +58,7 @@ demuestra (no a una afirmación).
 | **AC-05** | Autenticación X-Api-Key: solo se persiste el `sha256` del token; token plano nunca se loguea ni guarda; vigencia (expiración/revocación) chequeada | ✅ E-01 (in-memory); 🟡 E-02 (DataStore real) | `middleware/auth.ts` (`authMiddleware`, `hashToken`), `packages/domain/src/tokens.ts`, `packages/persistence/src/entities.ts` |
 | **AC-06** | Tenancy: `accountId` resuelto SIEMPRE del token, nunca del payload/query | ✅ E-01 | `middleware/auth.ts` (setea `req.accountId` del token), use-cases reciben `accountId` del `ctx`, no del body |
 | **AC-07** | Cap configurable hora/día/semana por consumidor+endpoint → 429 `CAP_EXCEEDED` con `Retry-After` | 🟡 E-01 (in-memory por contenedor); ⬜ E-04 (distribuido en Cache) | `middleware/cap.ts` (3 ventanas, headers `X-Cap-*`, `Retry-After`) |
-| **AC-08** | Idempotencia POST: `UNIQUE(account_id, idempotency_key)` (= `String(NroSolicitud)`) + `payloadFingerprint`; mismo NroSolicitud + payload distinto → 409; idempotencia por tenant | ✅ E-01 (lógica + tests); 🟡 E-02 (UNIQUE físico en DataStore) | `packages/application/src/create-opportunity-contact.ts`, `packages/domain/src/idempotency.ts`, `packages/persistence/src/catalyst.ts` (`insertIfAbsent`), test `create-opportunity-contact.test.ts` (5 casos) |
+| **AC-08** | Idempotencia POST (Capa 1): `UNIQUE(idempotency_key)` single-column (clave = header `X-Idempotency-Key`) + `payloadFingerprint`; misma clave + payload distinto → 409; el filtrado por `account_id` es lectura defensiva de tenancy, no el constraint | ✅ E-01 (lógica + tests); ✅ E-02 (UNIQUE físico en DataStore, validado 5/5) | `packages/application/src/create-opportunity-contact.ts`, `packages/domain/src/idempotency.ts`, `packages/persistence/src/catalyst.ts` (`insertIfAbsent`), test `create-opportunity-contact.test.ts` |
 | **AC-09** | Auditoría append-only: middleware on-finish, 1 registro por request en los 3 endpoints; sin PII/payload/bytes de PDF | ✅ E-01 | `middleware/audit.ts` (`auditOnFinish`), `entities.ts` (`AuditLogEntry`), `catalyst.ts` (`append`, sin update/delete) |
 | **AC-10** | Cross-tenant: acceso a recurso de otra Cuenta → 404 (no 403); 403 reservado a scope insuficiente | 🟡 E-01 (forma); ✅ al entrar adapter real | `routes/informes.ts` (`openPdf` valida tenancy → 404), `middleware/auth.ts` (`requireScope` → 403 solo por scope) |
 
@@ -75,7 +75,7 @@ demuestra (no a una afirmación).
 | Milestone | Definición de "hecho" | Épicas | Objetivo |
 |-----------|----------------------|--------|:--------:|
 | **M0 — Scaffold deployable** | Monorepo hexagonal en verde: `tsc -b`, vitest, eslint (fronteras), smoke e2e, bundle esbuild → `index.js`. Function desplegable con mocks. AC-01..AC-04, AC-06, AC-08 (lógica), AC-09 cubiertos | E-01 | ✅ 22/06 |
-| **M1 — CRM real e2e** | `POST /v1/opportunity-contact` crea Contacto+Oportunidad real en Zoho CRM vía Connection OAuth, con `CARDOC_CRM_MODE=zoho` y `CARDOC_PERSISTENCE=datastore`. UNIQUE físico activo. AC-05/AC-08 cerrados contra plataforma | E-02 | 26/06 |
+| **M1 — CRM real e2e** | `POST /v1/opportunity-contact` crea Contacto+Oportunidad real en Zoho CRM vía Connection OAuth, con `CARDOC_CRM_MODE=zoho` y `CARDOC_PERSISTENCE=datastore`. `UNIQUE(idempotency_key)` físico activo. AC-05/AC-08 cerrados contra plataforma | E-02 | 26/06 |
 | **M2 — Informes + PDF real** | `GET /v1/informes` lista desde Creator; `GET /v1/informes/:id/pdf` streamea PDF real (lazy generate + write-back a `Analisis.pdf_url`). AC-10 cerrado contra plataforma | E-03 | 30/06 |
 | **M3 — Cap distribuido + hardening** | Cap atómico sobre Catalyst Cache (no in-memory); matriz scope × endpoint verde; cross-tenant 404 verificado; secret-scan limpio | E-04, E-05 | 01/07 |
 | **M4 — Producción dev verificada** | Deploy a Catalyst dev; smoke e2e contra el entorno real verde; runbooks con dry-run ejecutado | E-06 | 03/07 |
@@ -96,7 +96,7 @@ Estado de hecho, documentado para trazabilidad. Lo construido y en verde:
 | `@cardoc/persistence` | Entities, repositorios (puertos), `catalyst.ts` (impl DataStore por tipado estructural, sin importar el SDK), `memory.ts` (fakes) | `packages/persistence/src/{entities,repositories,catalyst,memory}.ts` |
 | `@cardoc/application` | Use-cases `createOpportunityContact`, `listInformes`, `streamReportPdf` | `packages/application/src/*.ts` |
 | `@cardoc/fn-api` | Function Advanced I/O (stack node24): `index.ts` → `export = app` (CommonJS), `app.ts` arma el Express; pipeline de middlewares de orden fijo | `apps/catalyst/functions/api/src/*` |
-| CI + bundle | Workflow con typecheck/test/lint/secret-scan; `bundle-function.mjs` (esbuild, cjs, target node24, external `zcatalyst-sdk-node` (express inline)) → `index.js` (~1.3 MB) | `.github/workflows/ci.yml`, `scripts/bundle-function.mjs` |
+| CI + bundle | Workflow con typecheck/test/lint/secret-scan; `bundle-function.mjs` (esbuild, cjs, target node24) inlina express/zod/`@cardoc/*` y **externaliza** `zcatalyst-sdk-node` (require dinámicos que esbuild no resuelve) → `index.js`. El SDK externalizado NO lo provee el runtime: se **shippea como `node_modules` real** en el function dir vía `deploy-prep-sdk.mjs` (la lista de externals vive en `scripts/function-externals.mjs`) | `.github/workflows/ci.yml`, `scripts/bundle-function.mjs`, `scripts/function-externals.mjs`, `scripts/deploy-prep-sdk.mjs` |
 
 **Verificación en verde (toolchain real)**:
 
@@ -105,9 +105,9 @@ Estado de hecho, documentado para trazabilidad. Lo construido y en verde:
 NODE_OPTIONS=--use-system-ca pnpm install
 
 pnpm -r run typecheck   # tsc -b (project references)
-pnpm -r run test        # vitest: 7 tests
+pnpm -r run test        # vitest: 25 tests
 pnpm run lint           # eslint (fronteras hexagonales)
-# smoke e2e: 16/16
+# smoke local: 21/21
 pnpm --filter @cardoc/fn-api run build   # tsc -b + esbuild → index.js
 ```
 
@@ -136,8 +136,8 @@ rechazo del UNIQUE), y el contrato de la `CrmConnection`.
 | Tarea | Salida | Bloqueo |
 |-------|--------|---------|
 | Cargar `ZOHO_CLIENT_ID/SECRET/REFRESH_TOKEN` (+ `ZOHO_CRM_CONNECTOR_NAME`) en Environment Variables; `CARDOC_CRM_MODE=zoho` | el adapter escribe en el CRM real | secrets en consola (Nestor) |
-| Activar `CARDOC_PERSISTENCE=datastore`: crear tablas y el `UNIQUE(account_id, idempotency_key)` en consola | Idempotencia con red física, no solo lógica | **CAT-Q2** (atomicidad) — el UNIQUE del DataStore es el ancla; ⚠️ verificar (docs oficiales/consola) que el `insertRow` rechaza el segundo concurrente |
-| Sembrar `consumers` + `api_tokens` reales (hash del token, scopes, Cuenta "ML" `6687138000031320073`) | 1 automotora = 1 Cuenta CRM = 1 token | — |
+| Activar `CARDOC_PERSISTENCE=datastore`: crear tablas y el `UNIQUE(idempotency_key)` en consola (Catalyst solo admite UNIQUE single-column por UI; el DDL es CONSOLE ONLY, el SDK no crea tablas/columnas) | Idempotencia con red física, no solo lógica | **CAT-Q3** (atomicidad) — el UNIQUE del DataStore es el ancla; ⚠️ verificar (docs oficiales/consola) que el `insertRow` rechaza el segundo concurrente |
+| Sembrar `api_tokens` (obligatorio: sin la fila el alta devuelve 401 "token inválido") vía **Add Row** en consola, no por CSV import (el campo `scopes` es JSON con comas/comillas que el importador rompe): `token_hash`=sha256 del token, `consumer_id`, scopes, Cuenta "ML" `6687138000031320073`. `consumers`/`consumer_caps` NO hacen falta para el alta (el cap cae a defaults; `consumers` lo usa el webhook interno E-07) | 1 automotora = 1 Cuenta CRM = 1 token | — |
 
 **Definición de hecho (M1)**: con `CARDOC_CRM_MODE=zoho` y `CARDOC_PERSISTENCE=datastore`, un POST
 real crea Contacto (dedup por cédula `NroCedula`) + Oportunidad en estado `Nueva Solicitud`
@@ -177,7 +177,7 @@ El criterio: cada AC tiene un test que lo viola si se rompe. Los gates corren en
 | **Use-cases** | `createOpportunityContact`: crea / duplicate / conflict / idempotencia por tenant (AC-08) | ✅ 4 tests | CI, cada push |
 | **Contract (adapters)** | Cada adapter Zoho contra sandbox/entorno real | ⬜ Pendiente (E-02/E-03) — `packages/providers` hoy `passWithNoTests` | CI nightly + pre-release |
 | **Integración (repos)** | Repos DataStore reales, auth, idempotencia física, scope cruzado | ⬜ Pendiente (E-02) — `packages/persistence` hoy `passWithNoTests` | CI, cada push (tras E-02) |
-| **Smoke e2e** | Thin-slice del POST end-to-end (in-memory + Mock CRM) — 16/16 en verde | ✅ E-01 | Cada push + post-deploy |
+| **Smoke e2e** | Thin-slice del POST end-to-end (in-memory + Mock CRM) — smoke local 21/21 en verde | ✅ E-01 | Cada push + post-deploy |
 | **Lint (fronteras)** | eslint que prohíbe `fetch`/HTTP fuera de `packages/providers` y el SDK fuera de la capa function | ✅ | CI, cada push |
 | **Secret-scan** | gitleaks sobre la historia completa (`fetch-depth: 0`), binario directo (sin licencia del wrapper) | ✅ Gate | CI, cada push |
 
@@ -186,11 +186,11 @@ El criterio: cada AC tiene un test que lo viola si se rompe. Los gates corren en
 | Gate | Qué prueba | Resultado esperado |
 |------|-----------|--------------------|
 | **A → B = 404** | Token de Cuenta A pide un informe/PDF de Cuenta B | 404 (no 403, no 200) — AC-10 |
-| **Idempotencia concurrente** | Dos POST simultáneos con misma `(account_id, idempotency_key)` | 1 creado + 1 duplicate; nunca 2 Oportunidades — AC-08 |
+| **Idempotencia concurrente** | Dos POST simultáneos con misma `idempotency_key` (mismo tenant) | 1 creado + 1 duplicate; nunca 2 Oportunidades — AC-08 |
 | **Matriz scope × endpoint** | Cada token con scope insuficiente contra cada endpoint protegido | 403 `FORBIDDEN_SCOPE` (no 404, no 200) — AC-10 vs scope |
 | **Secret-scan** | Repo + historia | Cero hallazgos |
 
-> La idempotencia concurrente y el A→B=404 **reales** se cierran contra el DataStore (E-02) y los
+> La idempotencia concurrente (sobre `UNIQUE(idempotency_key)`) y el A→B=404 **reales** se cierran contra el DataStore (E-02) y los
 > adapters (E-03); en E-01 están cubiertos a nivel de lógica/use-case con fakes. El UNIQUE del
 > DataStore es la red física: ⚠️ verificar (docs oficiales/consola) el comportamiento exacto del
 > `insertRow` ante violación de UNIQUE concurrente antes de declarar el gate cerrado.
@@ -202,18 +202,22 @@ El criterio: cada AC tiene un test que lo viola si se rompe. Los gates corren en
 Confirmado en el repo:
 
 ```bash
-# 1) Compilar el monorepo (project references)
-pnpm exec tsc -b
+# 1) Predeploy de la function: build (tsc -b + esbuild → index.js cjs, inlina express/zod/@cardoc/*,
+#    externaliza zcatalyst-sdk-node) + deploy:prep (materializa el SDK externalizado como node_modules
+#    real en el function dir vía deploy-prep-sdk.mjs; los symlinks de pnpm se rompen al zipear)
+pnpm --filter @cardoc/fn-api predeploy
 
-# 2) Bundlear la function (esbuild → index.js cjs, external zcatalyst-sdk-node (express inlineado))
-pnpm --filter @cardoc/fn-api run build
-
-# 3) Primera vez: vincular proyecto/env (genera .catalystrc, gitignored)
+# 2) Primera vez: vincular proyecto/env (genera .catalystrc, gitignored)
 catalyst init
 
-# 4) Deploy
-catalyst deploy
+# 3) Deploy (desde apps/catalyst; CA corporativa vía NODE_OPTIONS)
+cd apps/catalyst
+NODE_OPTIONS=--use-system-ca catalyst deploy --only functions:api --ignore-scripts
 ```
+
+> **GOTCHA de deploy**: tras cualquier `pnpm install`, pnpm restaura el symlink del SDK en el function
+> dir → hay que RE-correr `predeploy` (o `deploy:prep`) antes de deployar, o el runtime falla con
+> `Cannot find module 'zcatalyst-sdk-node'`.
 
 **Configs versionadas** (anclaje real):
 - `apps/catalyst/catalyst.json` → `{ functions: { source: "functions", targets: ["api"] } }`
@@ -258,7 +262,7 @@ OAuth y secretos en [docs/playbooks/secretos-y-connections.md](docs/playbooks/se
 |-------------|-----------|------------|
 | Definición del negocio de PDF (cómo se genera, de qué datos, relación `Informes`↔`Analisis`) | E-03 / M2 | Resolver con el dueño funcional **antes** del 26/06; sin esto E-03 no arranca |
 | API names exactos de los módulos estándar Contacts/Deals/Accounts (Stage = `Nueva Solicitud` ✅; campos `Cedula`/`EXTERNAL_ID` ✅ creados) | E-02 / M1 | Confirmar los API names estándar con quien administra el CRM; el resto del mapeo ya está |
-| Setup de la Catalyst Connection OAuth a CRM | E-02 / M1 | Provisionar en consola en paralelo a E-01→E-02 |
+| Auth OAuth a CRM (self-client: `ZOHO_CLIENT_ID/SECRET/REFRESH_TOKEN` en env vars) ✅ | E-02 / M1 | Resuelto: self-client validado 5/5 en Catalyst; la Catalyst Connection de consola se descartó (bug de refresh token) |
 | Validaciones de plataforma Catalyst (de-risk pre-producción) | E-04 / M3 / M4 | Correr en paralelo, no toca código de E-01 |
 
 ---
@@ -292,10 +296,13 @@ HECHOS — todos llevan ⚠️ verificar (docs oficiales/consola):
 - **CAT-Q1**: streaming/chunked real y tope de payload en Advanced I/O. ⚠️ verificar (docs oficiales/consola).
 - **CAT-Q2**: atomicidad del increment en Catalyst Cache para el cap distribuido (hoy los contadores
   son in-memory por contenedor, ver `middleware/cap.ts`). ⚠️ verificar (docs oficiales/consola).
-- **CAT-Q3**: comportamiento del `UNIQUE(account_id, idempotency_key)` ante inserts concurrentes en
-  el DataStore (la red física de AC-08). ⚠️ verificar (docs oficiales/consola).
+- **CAT-Q3**: atomicidad del `UNIQUE(idempotency_key)` (single-column) ante inserts concurrentes en
+  el DataStore (la red física de AC-08; el constraint ya está creado y validado — falta confirmar el
+  comportamiento bajo concurrencia). ⚠️ verificar (docs oficiales/consola).
 - **CAT-Q4**: región / residencia de datos para PII (UY / AR / Wyoming). ⚠️ verificar (docs oficiales/consola).
-- **CAT-Q5**: setup y rotación de la Connection OAuth a CRM. ⚠️ verificar (docs oficiales/consola).
+- **CAT-Q5**: rotación/caducidad del refresh token del **self-client** (la Catalyst Connection de
+  consola quedó descartada por un bug de refresh token; la auth CRM real ya funciona por self-client —
+  ver `docs/OPEN-QUESTIONS.md` OQ-P3). ⚠️ verificar (rotación).
 - **CAT-Q6**: SLA / quotas / cold-start del plan contratado. ⚠️ verificar (docs oficiales/consola).
 - **CAT-Q7**: retención de logs y mecanismo de backup/export del DataStore. ⚠️ verificar (docs oficiales/consola).
 

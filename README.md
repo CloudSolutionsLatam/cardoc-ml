@@ -1,7 +1,7 @@
 ---
 title: cardoc-ml — API Catalyst (opportunity-contact + informes de revisión)
-status: scaffolding
-last_reviewed: 2026-06-25
+status: E-02 completo (alta real validada en Catalyst)
+last_reviewed: 2026-06-30
 ---
 
 # cardoc API
@@ -14,10 +14,11 @@ API en **Zoho Catalyst** (Advanced I/O) para automotoras. Tres endpoints `/v1`:
 | `GET /v1/informes` | `reports:read` | ⛔ **Descartado** ([ADR-0015](docs/decisions/README.md#adr-0015)): ML es push (outbound E-07), no pull. |
 | `GET /v1/informes/{id}/pdf` | `reports:pdf` | Stream autenticado del PDF, sin URL pública ni ubicación interna. |
 
-> **Estado: E-01 completo y deployable.** Verde verificado: `tsc -b`, 7 tests (vitest),
-> `eslint`, smoke e2e 16/16 y bundle esbuild. El thin-slice del POST corre end-to-end
-> contra el path in-memory + Mock CRM. El adapter **CRM (`ZohoCrmClient`) ya está implementado**
-> (E-02); Creator/WorkDrive y el DataStore productivo entran en E-03.
+> **Estado: E-02 completo y deployable.** Verde verificado: `tsc -b`, `eslint`, bundle esbuild,
+> 25 tests (vitest) + smoke local 21/21, y **alta real validada en Catalyst** (datastore + Zoho CRM)
+> vía `smoke-catalyst-crm.mjs` 5/5 (Deal en stage `Nueva Solicitud`). El adapter
+> **CRM (`ZohoCrmClient`) ya está implementado y validado** (E-02); solo
+> `ZohoCreatorReportsSource` (Creator/WorkDrive) sigue stub → entra en E-03.
 >
 > ```bash
 > pnpm install && pnpm -r run typecheck && pnpm -r run test && pnpm run lint
@@ -100,12 +101,24 @@ el resto corre 100% local.
 ## Deploy
 
 ```bash
-catalyst init          # primera vez: vincula proyecto/env (genera .catalystrc)
-pnpm --filter @cardoc/fn-api run build   # tsc -b + esbuild → index.js bundleado
-catalyst deploy
+# 1) build + materialización del SDK real en el function dir
+pnpm --filter @cardoc/fn-api predeploy    # build (tsc -b + esbuild → index.js) + deploy:prep
+
+# 2) deploy de la function (desde apps/catalyst, con la CA corporativa)
+cd apps/catalyst
+NODE_OPTIONS=--use-system-ca catalyst deploy --only functions:api --ignore-scripts
 ```
 
-## Open questions (E-02/E-03)
+El bundle esbuild inlina `express`, `zod` y los `@cardoc/*`; `zcatalyst-sdk-node` es la
+**excepción**: se externaliza (lista única en `scripts/function-externals.mjs`) y `deploy:prep`
+(`scripts/deploy-prep-sdk.mjs`) lo shippea como `node_modules` **real** en el function dir.
+Catalyst no instala las deps del `package.json`.
+
+> **Gotcha**: tras cualquier `pnpm install`, pnpm restaura el symlink del SDK → re-corré
+> `predeploy` (o `deploy:prep`) antes de deployar, o el runtime falla con
+> `Cannot find module`. Procedimiento completo: [playbooks/deploy-y-rollback.md](docs/playbooks/deploy-y-rollback.md).
+
+## Open questions (E-03)
 
 Registro único: **[docs/OPEN-QUESTIONS.md](docs/OPEN-QUESTIONS.md)** — negocio (generación
 del PDF, relación `Informes`↔`Analisis`, API names de los módulos CRM estándar) y

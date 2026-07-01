@@ -493,10 +493,11 @@ base real (Zoho CRM); cada capa deduplica con su propia clave.
 ### 8.1 Capa 1 — middleware (Catalyst), **opcional** (header `X-Idempotency-Key`)
 
 Si el request trae `X-Idempotency-Key`, se persiste un row en `crm_opportunities`
-(`UNIQUE(account_id, idempotency_key)` + `payload_fingerprint`) y se consulta **antes** de tocar
+(`UNIQUE(idempotency_key)` single-column + `payload_fingerprint`) y se consulta **antes** de tocar
 Zoho — fast-path que evita el roundtrip al CRM en los duplicados (`create-opportunity-contact.ts`):
 
-1. Se siembra un row `pending` con `insertIfAbsent` (clave `accountId + X-Idempotency-Key`).
+1. Se siembra un row `pending` con `insertIfAbsent` por `idempotency_key` (el `accountId` se filtra
+   en la query como defensa de tenancy, **no** es parte del constraint UNIQUE).
 2. **Si se creó** (somos el creador) → efecto externo (Capa 2) → `markCreated` → **`201 created`**.
 3. **Si ya existía**, según el row:
 
@@ -549,6 +550,7 @@ Estos puntos están abiertos; los campos PLACEHOLDER del contrato dependen de el
   para los `curl` de esta guía.
 
 > Estado E-06: la API, el sobre de error, los códigos, la idempotencia y los headers de cap están
-> **implementados y verdes** (`tsc -b`, 24 tests vitest, eslint, smoke e2e). El adapter de **CRM
+> **implementados y verdes** (`tsc -b`, 25 tests vitest, eslint, smoke local 21/21 + smoke Catalyst
+> 5/5). El adapter de **CRM
 > (`ZohoCrmClient`) está implementado** (E-02); el de Creator sigue **stub** (`NotImplementedError`) — los contratos de `data` se confirman al
 > cerrar las open questions. Ver [PLAN-DE-DESARROLLO](PLAN-DE-DESARROLLO.md).

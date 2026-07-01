@@ -2,7 +2,7 @@
 title: ADRs — cardoc-ml (log de decisiones de arquitectura)
 status: active
 document_type: decision-log
-last_reviewed: 2026-06-25
+last_reviewed: 2026-06-30
 ---
 
 # Decisiones de arquitectura (ADR log)
@@ -23,13 +23,13 @@ Convención: si una ADR crece o necesita discusión extensa, se separa a su prop
 | [0001](#adr-0001) | Catalyst como gateway de control delante de Zoho | Aceptada |
 | [0002](#adr-0002) | Idempotencia en 2 capas: `X-Idempotency-Key` opcional (Catalyst) + `EXTERNAL_ID`=NroSolicitud único (CRM) | Aceptada (revisado) |
 | [0003](#adr-0003) | Dedup de Contacto por `NroCedula` (campo Cedula custom en Contacts) | Aceptada |
-| [0004](#adr-0004) | Auth a Zoho CRM vía Catalyst Connection (OAuth gestionado) | Aceptada |
+| [0004](#adr-0004) | Auth a Zoho CRM vía self-client OAuth (SDK); la Catalyst Connection tenía bug de refresh token | Aceptada (revisado) |
 | [0005](#adr-0005) | Cross-tenant → 404 (no 403) | Aceptada |
 | [0006](#adr-0006) | `accountId` siempre del token | Aceptada |
 | [0007](#adr-0007) | Auditoría on-finish, 1 registro/request, append-only | Aceptada |
 | [0008](#adr-0008) | Adapter de streaming/SDK en la capa function | Aceptada |
 | [0009](#adr-0009) | HTTP externo solo en `packages/providers` | Aceptada |
-| [0010](#adr-0010) | Bundle esbuild: inlina todo salvo `zcatalyst-sdk-node` (SDK del runtime) | Aceptada (revisado en smoke) |
+| [0010](#adr-0010) | Bundle esbuild: inlina todo salvo `zcatalyst-sdk-node`, que se externaliza Y se shippea como `node_modules` real (el runtime no lo provee) | Aceptada (revisado en smoke) |
 | [0011](#adr-0011) | Contadores de cap in-memory por ahora | Aceptada (provisional) |
 | [0012](#adr-0012) | PDF: resolución perezosa con caché en Creator/WorkDrive | Aceptada (mecanismo de generación pendiente) |
 | [0013](#adr-0013) | Integración OUTBOUND a ML (CRM workflow → función Catalyst) | Aceptada |
@@ -54,9 +54,10 @@ real (Zoho CRM).
 - **Estado:** Aceptada — **implementado** (revisa la idea previa de un único header obligatorio / único anclaje en el body).
 - **Contexto:** ML manda `NroSolicitud` (único) en el body y, **opcionalmente**, un header `X-Idempotency-Key`.
 - **Consecuencia:**
-  - **Capa 1 — middleware (Catalyst):** SOLO si llega `X-Idempotency-Key`. Row en `crm_opportunities`
-    (`UNIQUE(account_id, idempotency_key)` + `payload_fingerprint`), consultado **antes** de tocar Zoho
-    → replay → `200 duplicate`; misma clave + payload distinto → `409`. Fast-path que evita el roundtrip al CRM.
+  - **Capa 1 — middleware (Catalyst):** SOLO si llega `X-Idempotency-Key` (ese header ES la clave, NO el
+    `NroSolicitud`). Row en `crm_opportunities` (`UNIQUE(idempotency_key)` **single-column** — la UI de Catalyst
+    no permite UNIQUE compuesto; `account_id` se filtra en la query como defensa de tenancy — + `payload_fingerprint`),
+    consultado **antes** de tocar Zoho → replay → `200 duplicate`; misma clave + payload distinto → `409`. Fast-path que evita el roundtrip al CRM.
   - **Capa 2 — base (Zoho CRM):** SIEMPRE. `EXTERNAL_ID` = `NroSolicitud` es **único** en Deals; al recrear,
     Zoho responde `DUPLICATE_DATA` con el id existente → el adapter lo devuelve como `duplicate` (no error).
     Dedup del Contacto por cédula. Es la verdad durable.
@@ -64,7 +65,6 @@ real (Zoho CRM).
     eso es exclusivo de la Capa 1). Ver `create-opportunity-contact.ts` + `providers/src/crm-client.ts`.
 - **Descartado:** un `X-Idempotency-Key` **obligatorio** (ML no siempre lo manda) y depender **solo** del
   middleware (se perdería la dedup si el DataStore se resetea — por eso la Capa 2 en el CRM).
-- **Descartado:** header `X-Idempotency-Key` (ML ancla en `NroSolicitud`, que viaja en el body).
 
 ## ADR-0003
 **Dedup de Contacto por `NroCedula`.**
@@ -74,10 +74,11 @@ real (Zoho CRM).
 - **Descartado:** email (ML no lo manda) / teléfono.
 
 ## ADR-0004
-**Auth a Zoho CRM = Catalyst Connection** (OAuth gestionado por la plataforma).
-- **Contexto:** llamar a CRM requiere OAuth con refresh; no queremos secretos en código.
-- **Consecuencia:** Catalyst gestiona refresh/rotación; el adapter recibe el `accessToken` resuelto (`CrmConnection`) y nunca toca secretos. Setup: [OQ-P3](../OPEN-QUESTIONS.md).
-- **Descartado:** token estático en env / OAuth a mano.
+**Auth a Zoho CRM = self-client OAuth resuelto por el SDK de Catalyst** (NO la Catalyst Connection de consola).
+- **Estado:** Aceptada — **revisado tras el deploy real (2026-06-30)**: la *Catalyst Connection* de consola tenía un bug que no generaba refresh token → se resuelve por **self-client a nivel código**.
+- **Contexto:** llamar a CRM requiere OAuth con refresh token; no queremos el dance a mano ni secretos hardcodeados.
+- **Consecuencia:** las credenciales del self-client (`ZOHO_CLIENT_ID` / `ZOHO_CLIENT_SECRET` / `ZOHO_REFRESH_TOKEN`) viven en **Environment Variables** de Catalyst; en runtime el SDK las usa vía `app.connection({...}).getConnector().getAccessToken()` (resolución **lazy** y memoizada por request). Override directo `ZOHO_CRM_ACCESS_TOKEN` para testing/token corto. El `accessToken` resuelto llega al adapter como `CrmConnection`; nunca se hardcodea. Ver `container.ts` y [`../playbooks/secretos-y-connections.md`](../playbooks/secretos-y-connections.md).
+- **Descartado:** la Catalyst Connection de consola (bug de refresh token); token estático en código; OAuth dance a mano en el adapter.
 
 ## ADR-0005
 **Cross-tenant → 404** (no 403). 403 queda reservado a falta de scope.
@@ -110,13 +111,16 @@ real (Zoho CRM).
 - **Descartado:** llamar a Zoho desde use-cases o rutas.
 
 ## ADR-0010
-**Bundle esbuild: inlinar todo salvo `zcatalyst-sdk-node`.** El único external es
-`zcatalyst-sdk-node` (lo provee el runtime de Catalyst; require **lazy**, solo en datastore
-mode); `express`, `zod` y los `@cardoc/*` se INLINAN en el `index.js`.
-- **Estado:** Aceptada — **revisado tras el smoke (2026-06-25)**: externalizar `express` daba `Cannot find module 'express'` en runtime → **Catalyst NO instala las `dependencies` del `package.json`** de la función. Lo único garantizado por la plataforma es el SDK.
-- **Contexto:** el deploy necesita un `index.js` autosuficiente; `workspace:*` no resuelve y `express` no está en el runtime.
-- **Consecuencia:** `external: ['zcatalyst-sdk-node']` en `scripts/bundle-function.mjs`; bundle ~1.3 MB. Ver [build/bundling](../playbooks/monorepo-build-y-bundling.md).
-- **Descartado:** externalizar `express` (no lo instala Catalyst); bundlear el SDK (lo provee el host).
+**Bundle esbuild: inlinar todo salvo `zcatalyst-sdk-node`, que se externaliza Y se shippea como
+`node_modules` real.** `express`, `zod` y los `@cardoc/*` se INLINAN en el `index.js`; el único
+external es `zcatalyst-sdk-node`.
+- **Estado:** Aceptada — **revisado a los golpes en el deploy real (smoke 2026-06-25, CRM real 2026-06-30).**
+- **Contexto:** el deploy necesita un `index.js` autosuficiente; `workspace:*` no resuelve. Se probaron tres caminos hasta dar con el bueno:
+  1. Externalizar `express` → runtime `Cannot find module 'express'` ⇒ **Catalyst NO instala las `dependencies` del `package.json`** (hay que inlinar).
+  2. Inlinar TODO, incluido el SDK (`external: []`) → runtime `Cannot find module './zcql/zcql'` ⇒ el SDK hace `require()` **dinámicos** de sus submódulos que esbuild no puede resolver estáticamente.
+  3. Externalizar el SDK sin más → runtime `Cannot find module 'zcatalyst-sdk-node'` ⇒ el runtime **NO lo provee**, y el symlink de pnpm se rompe al zipear en `catalyst deploy`.
+- **Consecuencia:** el SDK se **externaliza** (lista única en `scripts/function-externals.mjs`, consumida por `bundle-function.mjs`) y se **materializa como `node_modules` real** en el function dir vía `scripts/deploy-prep-sdk.mjs` (paso `pnpm --filter @cardoc/fn-api predeploy`, antes de `catalyst deploy`). Tras un `pnpm install` hay que re-correr el prep (restaura el symlink de pnpm). Ver [build/bundling](../playbooks/monorepo-build-y-bundling.md) y el [playbook de deploy](../playbooks/deploy-y-rollback.md).
+- **Descartado:** externalizar `express` (Catalyst no instala deps); inlinar el SDK (require dinámicos → rompe); asumir que el runtime provee el SDK (no lo hace).
 
 ## ADR-0011
 **Contadores de cap in-memory por ahora** (por contenedor caliente).

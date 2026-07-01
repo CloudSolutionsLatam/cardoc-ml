@@ -2,7 +2,7 @@
 title: Open questions — cardoc-ml (registro único)
 status: active
 document_type: open-questions
-last_reviewed: 2026-06-25
+last_reviewed: 2026-06-30
 ---
 
 # Open questions — registro único
@@ -35,21 +35,23 @@ resultante al [log de ADRs](decisions/README.md) si corresponde.
 |----|----------|---------|--------|
 | **OQ-P1** | Streaming en Advanced I/O. **✅ Resuelta (smoke 2026-06-25):** el PDF se streamea OK desde Catalyst (`application/pdf`, `%PDF`, `Cache-Control: no-store`). Tope de payload para PDFs muy grandes: aún por medir. | AC-05 (stream PDF) | ✅ resuelta (tope grande pendiente) |
 | **OQ-P2** | Atomicidad del increment en Catalyst Cache (para el cap distribuido). Hoy los contadores son in-memory por contenedor. | Cap global · [ADR-0011](decisions/README.md#adr-0011) | 🔴 abierta |
-| **OQ-P3** | Setup de la Connection OAuth a CRM (conector, scopes, DC) y API exacta del SDK para resolver el `accessToken` gestionado en runtime. | E-02 (auth CRM real) · [ADR-0004](decisions/README.md#adr-0004) | 🔴 abierta |
+| **OQ-P3** | Setup de la Connection OAuth a CRM (conector, scopes, DC) y API exacta del SDK para resolver el `accessToken` en runtime. **As-built:** la auth CRM real **ya funciona y está validada** (E-02, alta real en Catalyst contra Zoho vía `smoke-catalyst-crm.mjs`), pero **no** vía Catalyst Connection: la función resuelve el token por **self-client a nivel código** (`CrmConnection.getAccessToken()`) porque hay un bug de la Catalyst Connection con el refresh token. Residual: evaluar si migrar a la Connection gestionada una vez resuelto ese bug. | ~~E-02~~ (auth CRM real ✅) · [ADR-0004](decisions/README.md#adr-0004) | 🟡 acotada (self-client en prod) |
 | **OQ-P4** | Región/residencia de datos para la PII (jurisdicciones UY/AR/Wyoming). | Compliance pre-prod | 🔴 abierta |
 | **OQ-P5** | SLA/uptime, quotas (invocaciones, concurrencia, payload) y cold-start del plan contratado. | Capacidad / targets de calidad | 🔴 abierta |
 | **OQ-P6** | Retención nativa de logs. | Observabilidad | 🔴 abierta |
 | **OQ-P7** | Mecanismo de backup/export del DataStore. | Runbook de restore | 🔴 abierta |
-| **OQ-P8** | Sintaxis/UI exacta para crear el `UNIQUE(account_id, idempotency_key)` y demás índices en la consola; comando exacto de rollback del CLI. | Idempotencia en prod ([datastore-esquema](playbooks/datastore-esquema.md)) · rollback ([deploy](playbooks/deploy-y-rollback.md)) | 🔴 abierta |
+| **OQ-P8** | Índices/constraints del DataStore y comando exacto de rollback del CLI. **Aclaración as-built:** Catalyst **no** crea DDL por API/SDK (CONSOLE ONLY) y **no** admite UNIQUE compuesto por UI (solo single-column) — la pregunta original por `UNIQUE(account_id, idempotency_key)` estaba **mal planteada**. La idempotencia Capa 1 se apoya en `UNIQUE(idempotency_key)` (single-column), **ya creado y validado** (smoke Catalyst: 409 `IDEMPOTENCY_CONFLICT`); el filtrado por `(account_id, idempotency_key)` en el código es lectura defensiva de tenancy, **no** el constraint del índice. Residual: comando exacto de rollback del CLI. | rollback ([deploy](playbooks/deploy-y-rollback.md)) | 🟡 acotada (rollback pendiente) |
 | **OQ-P9** | Credenciales de `POST /api/login/authenticatecardoc` (Usuario/Password de cardoc) para el adapter ML → Catalyst Environment Variables; y URL prod vs testing. | E-07 (outbound a ML) · [ADR-0013](decisions/README.md#adr-0013) · [integracion-mlcenter](playbooks/integracion-mlcenter.md) | 🔴 abierta |
 
-> ⚠️ Mientras OQ-P8 no se cierre y el `UNIQUE` no esté creado en consola, la idempotencia
-> (ADR-0002) **falla en silencio** en `datastore` mode: `insertRow` no rechaza el duplicado.
+> ✅ El `UNIQUE(idempotency_key)` (single-column) **ya está creado en consola y verificado** en
+> Catalyst (smoke: 409 `IDEMPOTENCY_CONFLICT`), así que la idempotencia (ADR-0002) **rechaza el
+> duplicado** en `datastore` mode. Recordar que el DDL es CONSOLE ONLY: si se recrea la tabla y se
+> omite el `UNIQUE`, `insertRow` deja de rechazar el duplicado y la idempotencia falla en silencio.
 
 ## Follow-ups técnicos (no bloquean, anotados)
 
 - Auditoría on-finish (ADR-0007) no cubre un `500` de `attachContainer` (queda solo en logs). Decidir si se fuerza un registro mínimo.
 - Filas de idempotencia `pending` huérfanas (un POST que muere antes de `markCreated`) no tienen TTL/reaper → replays devuelven `202 in_progress` indefinidamente.
 - El estado `error` ahora es **reintentable** (efecto idempotente: dedup por cédula + `EXTERNAL_ID`). Residual: dos retries concurrentes de un row en `error` podrían ejecutar el efecto en paralelo (ventana acotada por los dedup, sin CAS sobre el estado del row).
-- Formalizar el smoke e2e como script versionado en el repo (hoy se corre fuera).
+- Smoke e2e ya **versionado** en el repo (`scripts/smoke-catalyst-crm.mjs`, 5/5 en Catalyst; smoke local 21/21). Follow-up: mantenerlo al día con nuevos endpoints.
 - Runbooks concretos sin escribir (solo la plantilla) — dry-run pre-producción.

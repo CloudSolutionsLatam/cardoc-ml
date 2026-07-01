@@ -1,7 +1,7 @@
 ---
 title: "Playbook — Secretos y Connections"
 status: vigente
-last_reviewed: 2026-06-25
+last_reviewed: 2026-06-30
 ---
 
 # Secretos y Connections
@@ -80,13 +80,14 @@ Puntos accionables:
 - En **runtime** la función lo lee vía `process.env["NOMBRE"]`. Ejemplo real en [`container.ts`](../../apps/catalyst/functions/api/src/container.ts):
 
   ```ts
-  accessToken: process.env["ZOHO_CRM_ACCESS_TOKEN"] ?? "dev-token",
-  apiDomain:   process.env["ZOHO_CRM_API_DOMAIN"]   ?? "https://www.zohoapis.com",
+  client_id:     process.env["ZOHO_CLIENT_ID"],      // self-client OAuth (ver §3)
+  client_secret: process.env["ZOHO_CLIENT_SECRET"],
+  refresh_token: process.env["ZOHO_REFRESH_TOKEN"],
   ```
 
-  El `?? "dev-token"` es **solo** el fallback de desarrollo local. En Production, `ZOHO_CRM_ACCESS_TOKEN` se resuelve desde la Catalyst Connection (ver §3), no desde una env var con el valor pegado.
+  En runtime, el access token de CRM lo renueva el **self-client** (`resolveZohoAccessToken`, §3) con esas creds; `ZOHO_CRM_ACCESS_TOKEN` es solo un override opcional para testing/token corto.
 
-> **Nota de higiene:** `ZOHO_CRM_ACCESS_TOKEN` **no** figura en [`/.env.example`](../../.env.example) —y está bien que no figure—. La plantilla solo declara `ZOHO_CRM_API_DOMAIN` y `ZOHO_CRM_CONNECTOR_NAME`. El access token nunca es una variable que un dev deba copiar a mano: lo provee la Connection. Mantener `.env.example` sin esa línea es parte del diseño.
+> **Nota de higiene:** `ZOHO_CRM_ACCESS_TOKEN` **no** figura en [`/.env.example`](../../.env.example) —y está bien que no figure—. El access token nunca es una variable que un dev deba copiar a mano: lo resuelve el self-client en runtime. Las credenciales del self-client (`ZOHO_CLIENT_ID/SECRET/REFRESH_TOKEN`) son secretos de Console y tampoco van en `.env.example`.
 
 ### 2.2 Patrón `secret_ref` — el DataStore guarda la referencia, no el valor
 
@@ -95,26 +96,24 @@ Regla dura del modelo de datos: **ninguna tabla del DataStore almacena un secret
 | Caso | Qué se guarda | Qué NO se guarda |
 |---|---|---|
 | Token de API de un consumidor | `api_tokens.token_hash` (SHA-256, ver §4) | El token en claro. Imposible reconstruirlo desde el hash. |
-| Credencial de Zoho CRM | El **nombre del conector** (`ZOHO_CRM_CONNECTOR_NAME`, p.ej. `zoho_crm_conn`) | El access/refresh token: los gestiona la Connection (§3). |
+| Credencial de Zoho CRM | El **nombre del conector** (`ZOHO_CRM_CONNECTOR_NAME`) + las creds del self-client en env vars (§3) | El access token: se resuelve en runtime, ninguna tabla del DataStore lo persiste. |
 
 El principio `secret_ref`: cuando una entidad necesita "el secreto X", guarda **el identificador con el que pedirlo** (nombre de Connection, nombre de env var), y la resolución a valor ocurre en runtime, en la capa función. El esquema completo del DataStore está en [datastore-esquema](./datastore-esquema.md).
 
 ---
 
-## 3. Auth a Zoho CRM vía Catalyst Connection (OAuth gestionado)
+## 3. Auth a Zoho CRM vía self-client OAuth (resuelto por el SDK de Catalyst)
 
-**Decisión confirmada (Nestor, 2026-06-25):** la autenticación a Zoho CRM es una **Catalyst Connection** — OAuth gestionado por la plataforma. cardoc **no** implementa el dance de OAuth ni guarda refresh tokens; eso es responsabilidad de Catalyst.
+**Decisión revisada (deploy real, 2026-06-30):** la *Catalyst Connection* de consola tenía un **bug que no generaba refresh token**, así que la auth a Zoho CRM se resuelve por **self-client a nivel código**: las credenciales del self-client (`ZOHO_CLIENT_ID` / `ZOHO_CLIENT_SECRET` / `ZOHO_REFRESH_TOKEN`) viven en **Environment Variables** y el **SDK de Catalyst** (`app.connection({...}).getConnector().getAccessToken()`) renueva el access token en runtime. cardoc no guarda el access token ni hace el dance a mano; el refresh token de larga vida vive (cifrado) en las env vars. Ver [ADR-0004](../decisions/README.md#adr-0004).
 
 ### 3.1 Cómo se modela en cardoc
 
-La separación de responsabilidades es explícita y está codificada en los tipos. Cabecera de [`crm-client.ts`](../../packages/providers/src/crm-client.ts):
-
-> La autenticación es Catalyst Connection (OAuth gestionado): la **FUNCIÓN** resuelve el `accessToken` desde la Connection y lo pasa en `CrmConnection`. El adapter **nunca** lee secretos por su cuenta.
+La separación de responsabilidades es explícita y está codificada en los tipos: la **FUNCIÓN** resuelve el `accessToken` (por self-client, vía el SDK) y lo pasa en `CrmConnection`; el adapter **nunca** lee secretos ni obtiene el token por su cuenta.
 
 El contrato que viaja al adapter es deliberadamente mínimo:
 
 ```ts
-/** Credenciales de runtime resueltas por la función desde la Catalyst Connection. */
+/** Credenciales de runtime resueltas por la función (self-client OAuth, vía el SDK). */
 export interface CrmConnection {
   accessToken: string;
   /** Dominio de la API de Zoho (p.ej. https://www.zohoapis.com). */
@@ -126,8 +125,8 @@ Quién hace qué:
 
 | Actor | Responsabilidad |
 |---|---|
-| **Catalyst Connection** | Mantiene el OAuth (refresh, expiración) contra Zoho. Fuente del access token. |
-| **Capa función** ([`container.ts`](../../apps/catalyst/functions/api/src/container.ts)) | Resuelve `CrmConnection {accessToken, apiDomain}` por request y la inyecta en el container. |
+| **Self-client + SDK Catalyst** (`resolveZohoAccessToken` en `container.ts`) | Renueva el access token contra Zoho con las creds del self-client en env vars. Fuente del access token. |
+| **Capa función** ([`container.ts`](../../apps/catalyst/functions/api/src/container.ts)) | Resuelve `CrmConnection {accessToken, apiDomain}` por request (lazy + memoizado) y la inyecta en el container. |
 | **Adapter** (`ZohoCrmClient` en `@cardoc/providers`) | Recibe `conn: CrmConnection` en cada método. Usa el token; **no** lo obtiene. Único lugar autorizado a hacer HTTP a CRM. |
 
 Esto se ve en la firma de cada método del puerto `CrmClient` — la `conn` es un parámetro, no un estado interno del adapter:
@@ -140,32 +139,39 @@ createOpportunity(input: CrmCreateOpportunityInput, conn: CrmConnection): Promis
 
 ### 3.2 La resolución en runtime
 
-`buildContainer(req)` en [`container.ts`](../../apps/catalyst/functions/api/src/container.ts) arma la `CrmConnection` por request vía `resolveCrmConnection(...)`:
+`buildContainer(req)` en [`container.ts`](../../apps/catalyst/functions/api/src/container.ts) arma la `CrmConnection` por request vía `resolveCrmConnection(app)`, con resolución **lazy y memoizada** del token (no se pide token si el request no toca CRM):
 
 ```ts
-function resolveCrmConnection(_appOrReq: unknown): CrmConnection {
-  return {
-    accessToken: process.env["ZOHO_CRM_ACCESS_TOKEN"] ?? "dev-token",
-    apiDomain:   process.env["ZOHO_CRM_API_DOMAIN"]   ?? "https://www.zohoapis.com",
-  };
+async function resolveZohoAccessToken(catalystApp: unknown): Promise<string> {
+  const direct = process.env["ZOHO_CRM_ACCESS_TOKEN"];   // override: testing / token corto
+  if (direct) return direct;
+  // Self-client: el SDK de Catalyst renueva el access token con las creds en env vars.
+  return app.connection({
+    [ZOHO_CONNECTOR]: {
+      client_id:     process.env["ZOHO_CLIENT_ID"],
+      client_secret: process.env["ZOHO_CLIENT_SECRET"],
+      auth_url:      "https://accounts.zoho.com/oauth/v2/auth",
+      refresh_url:   "https://accounts.zoho.com/oauth/v2/token",
+      refresh_token: process.env["ZOHO_REFRESH_TOKEN"],
+    },
+  }).getConnector(ZOHO_CONNECTOR).getAccessToken();
 }
 ```
 
-**Estado actual (E-02):** esta función todavía lee `ZOHO_CRM_ACCESS_TOKEN` de env (placeholder de dev). El comentario de la propia función lo deja anotado:
+**Verificado (E-02, 2026-06-30):** funciona end-to-end en Catalyst (`datastore+zoho`, alta real 5/5). El self-client **solo** resuelve dentro de la función Catalyst (necesita el `app` de `catalyst.initialize(req)`); por eso en modo `memory` local hace falta el override `ZOHO_CRM_ACCESS_TOKEN` (hay un fail-fast en `buildContainer` que lo exige).
 
-> El access token se resuelve por **self-client a nivel código** (`resolveZohoAccessToken`): el SDK renueva con `ZOHO_CLIENT_ID/SECRET/REFRESH_TOKEN`; override directo con `ZOHO_CRM_ACCESS_TOKEN` (dev).
->
-> **Prueba local:** `pnpm zoho:check` (script en `scripts/`, fuera del runtime) refresca el token por HTTP directo (sin Catalyst) y ejerce el `ZohoCrmClient` contra el CRM real — READ-only por default; `--write` crea registros (requiere `CARDOC_TEST_ACCOUNT_ID`).
-
-**⚠️ verificar (docs oficiales / consola):** la **API exacta del SDK Catalyst para obtener el access token de una Connection** en runtime (nombre del método, si toma el `app` de `catalyst.initialize(req)` y el nombre del conector `ZOHO_CRM_CONNECTOR_NAME`, manejo de refresh/expiración). Cuando se confirme, `resolveCrmConnection` reemplaza el `process.env[...] ?? "dev-token"` por la llamada real al conector. Es parte del de-risk de [OPERACIONES](../../OPERACIONES.md) y del setup de Connection OAuth (open question de plataforma).
+> **Prueba local:** `pnpm zoho:check` (script en `scripts/`, fuera del runtime) refresca el token por HTTP directo (`grant_type=refresh_token` contra `accounts.zoho.com`) y ejerce el `ZohoCrmClient` contra el CRM real — READ-only por default; `--write` crea registros (requiere `CARDOC_TEST_ACCOUNT_ID`).
 
 ### 3.3 Variables `ZOHO_CRM_*`
 
 | Variable | En `.env.example` | Rol | Fuente del valor real |
 |---|---|---|---|
 | `ZOHO_CRM_API_DOMAIN` | Sí (`https://www.zohoapis.com`) | Dominio base de la API de Zoho. No es secreto. | Env var / Console. |
-| `ZOHO_CRM_CONNECTOR_NAME` | Sí (`zoho_crm_conn`) | Nombre de la Catalyst Connection a consultar. No es secreto — es un `secret_ref`. | Env var / Console. |
-| `ZOHO_CRM_ACCESS_TOKEN` | **No** | Placeholder de dev (fallback `?? "dev-token"`). En prod **no se usa** como valor pegado. | Catalyst Connection (§3.2). |
+| `ZOHO_CRM_CONNECTOR_NAME` | Sí (`zoho_crm_conn`) | Nombre lógico del conector self-client. No es secreto — es un `secret_ref`. | Env var / Console. |
+| `ZOHO_CLIENT_ID` | **No** | Client ID del self-client OAuth. **Secreto.** | Console → Environment Variables. |
+| `ZOHO_CLIENT_SECRET` | **No** | Client secret del self-client. **Secreto.** | Console → Environment Variables. |
+| `ZOHO_REFRESH_TOKEN` | **No** | Refresh token de larga vida (self-client). **Secreto.** | Console → Environment Variables. |
+| `ZOHO_CRM_ACCESS_TOKEN` | **No** | Override directo del access token (testing / token corto). Si está, saltea el self-client. | Console (opcional). |
 
 El switch de modo lo da `CARDOC_CRM_MODE`: `zoho` → `ZohoCrmClient` (HTTP real, requiere Connection); cualquier otro valor → `MockCrmClient` (dedup en memoria, sin red). Default en `.env.example`: `mock`.
 
@@ -223,8 +229,9 @@ Antes de cada deploy / al onboard de un consumidor:
 
 - [ ] No hay `.env`, `.catalystrc` ni `index.js` bundle trackeados (`git status` limpio en esos paths).
 - [ ] CI `secret-scan` (gitleaks) en verde sobre el PR.
-- [ ] Secretos de Zoho cargados en Catalyst Console del environment correcto, **no** en el repo. **⚠️ verificar** que la Connection `zoho_crm_conn` está configurada en el environment de destino.
+- [ ] Secretos de Zoho del self-client (`ZOHO_CLIENT_ID` / `ZOHO_CLIENT_SECRET` / `ZOHO_REFRESH_TOKEN`) cargados en Catalyst Console del environment correcto, **no** en el repo.
 - [ ] Tokens de consumidor: solo `token_hash` en `api_tokens`; el token en claro entregado por canal seguro y no persistido en ningún lado.
+- [ ] **Seed obligatorio de `api_tokens`:** las tablas del DataStore se crean **vacías**. Sin al menos la fila de `api_tokens` con el `token_hash` del consumidor, todo request cae en `401 "token inválido"`. Sembrarla vía **"Add Row"** en la consola, **no** por CSV import: el campo `scopes` es JSON con comas/comillas que el importador CSV rompe. (`consumers`/`consumer_caps` **no** son necesarias para el alta — el cap cae a defaults; `consumers` la usa el webhook interno E-07.)
 - [ ] Rotación pendiente: ¿hay tokens viejos sin `revoked_at` tras una rotación completada? Cerrarlos.
 
 ---

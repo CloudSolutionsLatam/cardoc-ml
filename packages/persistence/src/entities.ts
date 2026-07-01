@@ -34,8 +34,9 @@ export type OpportunityStatus = "pending" | "created" | "error";
 
 /**
  * Registro de la Oportunidad creada vía POST. La red FÍSICA anti-duplicación es
- * `UNIQUE(account_id, idempotency_key)` (AC-08); `payloadFingerprint` detecta el
- * conflicto "misma clave, payload distinto".
+ * `UNIQUE(idempotency_key)` single-column (AC-08; la UI de Catalyst no permite UNIQUE
+ * compuesto — `account_id` se filtra en la query como defensa de tenancy);
+ * `payloadFingerprint` detecta el conflicto "misma clave, payload distinto".
  */
 export interface OpportunityRecord {
   accountId: string;

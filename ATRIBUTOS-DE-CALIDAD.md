@@ -47,14 +47,16 @@ Todo lo demás (latencia, costo, elegancia de código) se subordina a estos cuat
 
 ## 2. Integridad: no duplicar la Oportunidad
 
-La red anti-duplicación es **física** (`UNIQUE(account_id, idempotency_key)` en el
+La red anti-duplicación es **física** (`UNIQUE(idempotency_key)` single-column en el
 DataStore), no una verificación de buena fe en código. El use-case siembra un row
-`pending` ANTES de tocar CRM; solo el creador del row ejecuta el efecto externo.
+`pending` ANTES de tocar CRM; solo el creador del row ejecuta el efecto externo. El
+filtrado por `(account_id, idempotency_key)` en el código es lectura defensiva de
+tenancy, no el constraint del índice.
 
 | Atributo | Target propuesto | Cómo se verifica |
 |----------|------------------|------------------|
-| Doble creación de Oportunidad | **Cero**. Clave = `NroSolicitud` (del body); unicidad física `UNIQUE(account_id, idempotency_key)` (= `String(NroSolicitud)`). Replays con el mismo NroSolicitud devuelven el resultado previo (`duplicate`), no crean un segundo Deal | Test de idempotencia en CI: mismo `(accountId, NroSolicitud, payload)` 2×/concurrente ⇒ una sola creación. Cubierto en `packages/application/test/create-opportunity-contact.test.ts` (path in-memory) |
-| Mismo NroSolicitud + payload distinto | **409 IDEMPOTENCY_CONFLICT** (semántica Stripe). `payloadFingerprint` (SHA-256 canónico, claves ordenadas) se persiste con la fila; si difiere del fingerprint guardado → conflicto | Test unitario de `payloadFingerprint` (`packages/domain/test/idempotency.test.ts`) + test del use-case que cubre el branch `status: "conflict"` |
+| Doble creación de Oportunidad | **Cero** vía dos capas: **Capa 2** (siempre) `EXTERNAL_ID = NroSolicitud` único en Deals → recrear devuelve el existente (`duplicate`); **Capa 1** (si llega `X-Idempotency-Key`) `UNIQUE(idempotency_key)` single-column en el DataStore corta antes de tocar el CRM. Los replays no crean un segundo Deal | Test de idempotencia en CI: mismo `(accountId, idempotencyKey, payload)` 2×/concurrente ⇒ una sola creación. Cubierto en `packages/application/test/create-opportunity-contact.test.ts` (path in-memory) |
+| Misma clave `X-Idempotency-Key` + payload distinto | **409 IDEMPOTENCY_CONFLICT** (semántica Stripe; solo en Capa 1, con header). `payloadFingerprint` (SHA-256 canónico, claves ordenadas) se persiste con la fila; si difiere del fingerprint guardado → conflicto | Test unitario de `payloadFingerprint` (`packages/domain/test/idempotency.test.ts`) + test del use-case que cubre el branch `status: "conflict"` |
 | Dedup de Contacto | **Por cédula (`NroCedula`)**: `findContactByCedula` antes de crear; si existe, se reutiliza (`reusedContact: true`). Requiere campo `Cedula` custom en Contacts | Test del use-case (rama "contacto reutilizado por cédula"); contra Mock CRM hoy, contra Zoho CRM en E-02 |
 | Atomicidad del seed | El row `pending` se inserta con `insertIfAbsent`; si no se creó (otro flujo ganó la carrera), no se ejecuta el efecto externo | Cubierto por el test concurrente. **Depende de** que el DataStore garantice la unicidad real bajo concurrencia → validación de plataforma (§9, ítem 2) |
 | Estado de la Oportunidad | Fijo `Nueva Solicitud`, fijado **server-side** (`FIXED_OPPORTUNITY_STAGE`), nunca elegido por el consumidor | Inspección de código; valor de picklist confirmado (Nestor 2026-06-30, provisional) |
@@ -72,7 +74,7 @@ DataStore), no una verificación de buena fe en código. El use-case siembra un 
 | Token en reposo | Solo se persiste el **`sha256`** del token (`api_tokens.token_hash`); el token plano nunca toca el DataStore ni los logs | Inspección de `authMiddleware` (compara `hashToken(token)`) y de `tokens.ts` (`hashToken`/`generateToken`) |
 | Vigencia del token | Se rechaza (**401 UNAUTHENTICATED**) si revocado (`revoked_at`) o expirado (`expires_at`) | Tests de auth: token revocado/expirado → 401 |
 | No filtración de upstream | El sobre de error nunca expone URL/ruta/fileId interno; `UpstreamError` lleva solo una etiqueta **opaca** (`"crm"`/`"creator"`/`"workdrive"`) | Inspección de `errors.ts` (función + providers) + test que verifica que el body de un 502 no contiene URLs internas |
-| Auth a Zoho CRM | Vía **Catalyst Connection** (OAuth gestionado por la plataforma), no tokens hardcodeados en código | Setup de la Connection → validación de plataforma (§9, ítem 5). Hoy `ZOHO_CRM_ACCESS_TOKEN` es placeholder dev |
+| Auth a Zoho CRM | Vía **self-client OAuth** (el SDK de Catalyst renueva el token con `ZOHO_CLIENT_ID/SECRET/REFRESH_TOKEN` en env vars), no tokens hardcodeados en código | Validado end-to-end en Catalyst (E-02, alta real 5/5). La Catalyst Connection de consola se descartó por un bug de refresh token |
 | Rotación de credenciales | Tokens de consumidor revocables (`revoked_at`) y rotables; rotación ≤ 90 días o inmediata ante sospecha | Procedimiento documentado y **probado** (no solo escrito): ver playbook [secretos-y-connections](docs/playbooks/secretos-y-connections.md) |
 
 ---
@@ -114,7 +116,7 @@ latencia del upstream, que cardoc no controla.
 | Atributo | Target propuesto | Cómo se verifica |
 |----------|------------------|------------------|
 | Trazabilidad end-to-end | **100%** de los requests con `correlationId`. Se acepta `X-Correlation-Id` entrante si es UUID válido, si no se regenera; se devuelve en el header `X-Correlation-Id` Y en el sobre de error | Inspección de `correlationMiddleware`; muestreo: tomar un `correlationId` y reconstruir el request en `audit_log`. Test: request sin header ⇒ se genera UUID; con UUID válido ⇒ se propaga |
-| Audit trail append-only | **1 registro por request** en los 3 endpoints, escrito on-finish: `timestamp, correlationId, consumerId, accountId, endpoint, outcome, httpStatus, latencyMs, errorCode`. Sin UPDATE/DELETE desde la aplicación | Inspección de `auditOnFinish` + `AuditLogEntry`; test: cada endpoint deja exactamente 1 registro con el `httpStatus` correcto (incluso en error) |
+| Audit trail append-only | **1 registro por request** en los 3 endpoints, escrito on-finish: `_timestamp, correlationId, consumerId, accountId, endpoint, outcome, httpStatus, latencyMs, errorCode` (`_timestamp` porque `timestamp` es nombre de columna reservado en Catalyst). Sin UPDATE/DELETE desde la aplicación | Inspección de `auditOnFinish` + `AuditLogEntry`; test: cada endpoint deja exactamente 1 registro con el `httpStatus` correcto (incluso en error) |
 | Auditoría sin PII ni payload | El `audit_log` guarda **solo identificadores y estado** — nunca el payload, la PII (documento/datos de contacto) ni los bytes del PDF | Inspección de `auditOnFinish` (no toca body) + revisión en code review de cada campo del entry |
 | Logs operativos sin secretos | Los `console.error` de error/audit logean solo `correlationId`, método, path y código — nunca token, payload, PII ni URL interna | Inspección de `errorMiddleware` y del catch de `auditOnFinish` |
 | Health check observable | `GET /v1/health` abierto (sin auth, no se audita) para el monitoreo externo | Inspección de `app.ts`; el monitoreo externo lo consume |
@@ -139,7 +141,7 @@ latencia del upstream, que cardoc no controla.
 |----------|------------------|------------------|
 | Generación perezosa del PDF | El PDF se genera **una sola vez**: si `Analisis.pdf_url` está lleno → stream desde WorkDrive; si vacío → generar + write-back a `Analisis.pdf_url` y luego stream. Evita regenerar en cada request (costo de cómputo) | Inspección del contrato de `ReportsSource.openPdf`. **El generador concreto (plantilla Creator vs HTML→PDF) y los datos de origen son open question** (§9 negocio) |
 | Adapter de SDK/streaming en la capa function | El adapter que toca el SDK de Catalyst vive en `apps/catalyst/functions/api`, NO en `packages/*` — el dominio queda portable y testeable sin Catalyst | Estructura del repo: `packages/*` no importa `zcatalyst-sdk-node` (es external solo en el bundle de la function) |
-| Deploy reproducible | `tsc -b` (project references) + `scripts/bundle-function.mjs` (esbuild) → `index.js` único. `catalyst deploy` sube el bundle autocontenido (el runtime provee `zcatalyst-sdk-node`) | Pipeline: build en verde (`tsc -b`, 7 tests, eslint, smoke 16/16, bundle). Ver [deploy-y-rollback](docs/playbooks/deploy-y-rollback.md) |
+| Deploy reproducible | `tsc -b` (project references) + `scripts/bundle-function.mjs` (esbuild) → `index.js` único (CommonJS; express/zod/`@cardoc/*` inlineados). `zcatalyst-sdk-node` es la excepción: se **externaliza** (hace `require()` dinámicos que esbuild no resuelve) y se **shippea como `node_modules` real** en el function dir vía `scripts/deploy-prep-sdk.mjs`; Catalyst no instala las deps del `package.json`. La lista única de externals vive en `scripts/function-externals.mjs`. Tras cualquier `pnpm install`, re-correr `predeploy`/`deploy:prep` (pnpm restaura el symlink del SDK) | Pipeline: build en verde (`tsc -b`, 7 tests, eslint, smoke 16/16, bundle). Ver [deploy-y-rollback](docs/playbooks/deploy-y-rollback.md) |
 | Instalación en red corporativa | `NODE_OPTIONS=--use-system-ca pnpm install` (CA propia / intercepción TLS). `pnpm.onlyBuiltDependencies: ["esbuild"]` evita postinstalls inesperados | Documentado en [README.md](README.md) y [monorepo-build-y-bundling](docs/playbooks/monorepo-build-y-bundling.md) |
 | Presupuesto mensual y costo por request | **Por definir** según plan de Catalyst y volumen relevado; alerta de consumo al 80% | Revisión mensual de consumo. Requiere las quotas/plan de la plataforma (§9) |
 
@@ -158,7 +160,7 @@ estructura de configs (`catalyst.json`, `catalyst-config.json` con `stack: node2
 | 2 | **CRM (negocio)**: API names exactos de los módulos estándar Contacts/Deals/Accounts. ✅ Stage = `Nueva Solicitud`; campos custom `Cedula` (Contacts) y `EXTERNAL_ID` (Deals) creados | Integridad / no-duplicación (§2) |
 | 3 | **Streaming y payload** ⚠️: streaming/chunked real y tope de payload en Advanced I/O | Performance / confidencialidad del PDF (§5, §2) |
 | 4 | **Cache (atomicidad)** ⚠️: atomicidad del increment en Catalyst Cache para el cap distribuido (hoy los contadores son in-memory por contenedor) | Cap (§7) |
-| 5 | **Connection OAuth** ⚠️: setup de la Catalyst Connection a Zoho CRM (auth gestionada) | Seguridad / auth a CRM (§3) |
+| 5 | **Self-client OAuth** ✅: auth a Zoho CRM por self-client (SDK), validada en E-02; la Catalyst Connection quedó descartada (bug de refresh token) | Seguridad / auth a CRM (§3) |
 | 6 | **Residencia de datos** ⚠️: región/data center y residencia de la PII (jurisdicciones UY / AR / Wyoming) | Seguridad / compliance (§3) |
 | 7 | **SLA / quotas / cold-start / logs / backup** ⚠️: SLA y uptime del plan, quotas (invocaciones, concurrencia, tamaño de payload), cold-start p95, retención de logs, y mecanismo de backup/export del DataStore | Disponibilidad, capacidad, observabilidad, recuperación (§4, §5, §6) |
 

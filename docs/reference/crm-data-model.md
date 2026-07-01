@@ -30,8 +30,10 @@ discovery del CRM. **No duplica** ese discovery: es la proyección mínima para 
 `findContactByCedula` (dedup), `findDealByExternalId` (idempotencia del Deal), `createContact`,
 `createOpportunity`. Token vía **self-client del SDK** (`container.ts`, lazy + memoizado por request).
 El estado `error` del use-case es **reintentable** (efecto idempotente: dedup por cédula +
-`EXTERNAL_ID`). 24 tests verdes. Falta operativo: secrets en env vars + `CARDOC_CRM_MODE=zoho` +
-DataStore productivo (UNIQUE).
+`EXTERNAL_ID`). 25 tests verdes. **Alta real validada en Catalyst** (datastore + Zoho):
+smoke `scripts/smoke-catalyst-crm.mjs` → 5/5, con el Deal en `Stage = "Nueva Solicitud"`.
+La idempotencia Capa 1 se apoya en `UNIQUE(idempotency_key)` (single-column; el filtrado por
+`account_id` en el código es lectura defensiva de tenancy, no parte del índice).
 
 ## Módulos (api_name)
 
@@ -126,4 +128,5 @@ Las solicitudes AutoCheck van en el pipeline **`B2B`** (no el `Standard` default
 - **CRM-Q4**: ✅ Resuelto — vehículo como texto en `nota_agenda`; no se modela `Products`.
 - **CRM-Q5**: ✅ Resuelto — `Pipeline = "B2B"` (`ZOHO_FIXED_PIPELINE`).
 - **OAuth** ([OQ-P3](../OPEN-QUESTIONS.md)): self-client (client_id/secret/refresh_token) para
-  escribir en CRM. **Único bloqueante restante del adapter real.**
+  escribir en CRM. **Resuelto en el entorno de smoke** (el alta real ya escribió en Zoho, 5/5);
+  queda replicar la config de secrets en cada entorno donde se despliegue.

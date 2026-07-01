@@ -1,21 +1,24 @@
 # Bootstrap del DataStore (entorno ML)
 
 Catalyst **no** crea tablas por API/SDK — solo desde la consola. Estos CSV aceleran el paso:
-los **headers definen las columnas** al importar, y dos traen ya la **fila de seed**.
+los **headers definen las columnas** al importar. El **seed** de `api_tokens` NO va por CSV —
+se carga a mano con **Add Row** (ver paso 4); el campo `scopes` es JSON con comas/comillas que el
+importador CSV rompe.
 
 ## Pasos (Catalyst Console → proyecto ML → Development → Data Store)
 
-1. **Import (CSV) → crear tabla** con cada archivo, respetando el **nombre EXACTO** de tabla:
-   | CSV | Tabla | Trae seed |
-   |-----|-------|-----------|
-   | `api_tokens.csv` | `api_tokens` | ✅ 1 fila (token de dev) |
-   | `consumers.csv` | `consumers` | ✅ 1 fila (Cuenta ML) |
-   | `crm_opportunities.csv` | `crm_opportunities` | — (vacía) |
-   | `audit_log.csv` | `audit_log` | — (vacía) |
-   | `consumer_caps.csv` | `consumer_caps` | — (vacía) |
+1. **Import (CSV) → crear tabla** con cada archivo, respetando el **nombre EXACTO** de tabla.
+   El import se usa SOLO para crear las columnas; **todas las tablas quedan vacías** (el seed va aparte, paso 5):
+   | CSV | Tabla |
+   |-----|-------|
+   | `api_tokens.csv` | `api_tokens` |
+   | `consumers.csv` | `consumers` |
+   | `crm_opportunities.csv` | `crm_opportunities` |
+   | `audit_log.csv` | `audit_log` |
+   | `consumer_caps.csv` | `consumer_caps` |
 
    > Si tu consola **no** crea la tabla desde el import: creá las 5 tablas a mano con esas
-   > columnas (snake_case) e importá los 2 CSV con seed a las tablas ya creadas.
+   > columnas (snake_case).
 
 2. **Columnas y tipos EXACTOS** (tipo Catalyst + longitud sugerida para `Var Char`):
 
@@ -32,8 +35,8 @@ los **headers definen las columnas** al importar, y dos traen ya la **fila de se
    | | `crm_account_id` | Var Char | 50 | **UNIQUE** |
    | | `name` | Var Char | 255 | |
    | | `status` | Var Char | 20 | |
-   | `crm_opportunities` | `account_id` | Var Char | 50 | 🔴 **UNIQUE(account_id, idempotency_key)** |
-   | | `idempotency_key` | Var Char | 255 | (parte del UNIQUE) |
+   | `crm_opportunities` | `account_id` | Var Char | 50 | (lectura de tenancy, no índice) |
+   | | `idempotency_key` | Var Char | 255 | 🔴 **UNIQUE** |
    | | `payload_fingerprint` | Var Char | 64 | |
    | | `contact_id` | Var Char | 50 | |
    | | `opportunity_id` | Var Char | 50 | |
@@ -41,7 +44,7 @@ los **headers definen las columnas** al importar, y dos traen ya la **fila de se
    | | `correlation_id` | Var Char | 64 | |
    | | `created_at` | Var Char | 40 | |
    | | `updated_at` | Var Char | 40 | |
-   | `audit_log` | `timestamp` | Var Char | 40 | |
+   | `audit_log` | `_timestamp` | Var Char | 40 | (`timestamp` es nombre RESERVADO en Catalyst) |
    | | `correlation_id` | Var Char | 64 | índice |
    | | `consumer_id` | Var Char | 100 | |
    | | `account_id` | Var Char | 50 | |
@@ -50,8 +53,8 @@ los **headers definen las columnas** al importar, y dos traen ya la **fila de se
    | | `http_status` | **Int** | — | |
    | | `latency_ms` | **Int** | — | |
    | | `error_code` | Var Char | 50 | |
-   | `consumer_caps` | `consumer_id` | Var Char | 100 | UNIQUE(consumer_id, endpoint) |
-   | | `endpoint` | Var Char | 50 | (parte del UNIQUE) |
+   | `consumer_caps` | `consumer_id` | Var Char | 100 | índice |
+   | | `endpoint` | Var Char | 50 | índice |
    | | `limit_hour` | **Int** | — | |
    | | `limit_day` | **Int** | — | |
    | | `limit_week` | **Int** | — | |
@@ -66,14 +69,25 @@ los **headers definen las columnas** al importar, y dos traen ya la **fila de se
    > `account_id`=id de Cuenta Zoho) vía ZCQL `WHERE consumer_id = '...'`, no por ROWID. Además
    > `account_id` apunta a una Cuenta de **Zoho** (externa), no a una tabla local. Por eso `Var Char`.
 
-3. **Constraints A MANO** (la parte que no se puede saltear):
-   - 🔴 `crm_opportunities`: **UNIQUE(account_id, idempotency_key)** — sin esto la idempotencia falla en silencio.
+3. **Constraints A MANO** (la parte que no se puede saltear — Catalyst solo permite UNIQUE de **una** columna por UI):
+   - 🔴 `crm_opportunities`: **UNIQUE(idempotency_key)** — sin esto la idempotencia (Capa 1) falla en silencio.
+     El filtrado por `account_id` + `idempotency_key` en el código es lectura defensiva de tenancy, no el constraint del índice.
    - `api_tokens`: UNIQUE(token_hash)
    - `consumers`: UNIQUE(consumer_id), UNIQUE(crm_account_id)
-   - `consumer_caps`: UNIQUE(consumer_id, endpoint) (recomendado)
 
-4. **Env vars** (Configuration → Environment Variables): `CARDOC_PERSISTENCE=datastore`,
+4. **Seed OBLIGATORIO de `api_tokens` (Add Row, NO CSV)** — sin esta fila el alta devuelve 401
+   "token inválido". En la consola: tabla `api_tokens` → **Add Row** con:
+   - `token_hash` = `4c5dc9b7...031e` (sha256 de `"test-token"`)
+   - `consumer_id` = `consumer_ml`
+   - `account_id` = `6687138000031320073`
+   - `scopes` = `["opportunities:create","reports:read","reports:pdf"]`
+   - resto de columnas vacías.
+
+   > `consumers` y `consumer_caps` **no** hacen falta para el alta (el cap cae a defaults; `consumers`
+   > lo usa el webhook interno E-07).
+
+5. **Env vars** (Configuration → Environment Variables): `CARDOC_PERSISTENCE=datastore`,
    `CARDOC_CRM_MODE=zoho`, `ZOHO_CLIENT_ID/SECRET/REFRESH_TOKEN`.
 
-El seed mapea `X-Api-Key: test-token` (hash sha256) → Cuenta ML `6687138000031320073` con los 3 scopes.
+La fila de `api_tokens` (sembrada por Add Row) mapea `X-Api-Key: test-token` (hash sha256) → Cuenta ML `6687138000031320073` con los 3 scopes.
 Detalle del esquema: `docs/playbooks/datastore-esquema.md`.

@@ -43,10 +43,11 @@ configuración de caps. Esto mantiene a Zoho como sistema de registro y a cardoc
 una superficie de integración delgada, auditable y desacoplable.
 
 > **Estado (2026-06-25)**: E-01 (scaffold) completo y deployable. La lógica de E-02/E-03
-> (use-cases + puertos) está construida; `ZohoCrmClient` **implementado** (E-02), mientras
-> `ZohoCreatorReportsSource` sigue stub `NotImplemented`. Verde verificado: `tsc -b`,
-> 7 tests (vitest), eslint, smoke e2e 16/16, bundle esbuild. Cronograma 22/06→03/07/2026,
-> owner Nestor Toñanez, 1 dev.
+> (use-cases + puertos) está construida; `ZohoCrmClient` **implementado** y validado (E-02),
+> mientras `ZohoCreatorReportsSource` sigue stub `NotImplemented` (E-03). Verde verificado:
+> `tsc -b`, 25 tests (vitest), eslint, smoke local 21/21, bundle esbuild. Alta real en
+> Catalyst (datastore+Zoho) validada con `scripts/smoke-catalyst-crm.mjs` → 5/5. Cronograma
+> 22/06→03/07/2026, owner Nestor Toñanez, 1 dev.
 
 ## 2. Diagrama de componentes
 
@@ -73,15 +74,16 @@ una superficie de integración delgada, auditable y desacoplable.
                                   │ api_tokens    │   tokens, consumidores, idempotencia,
                                   │ consumers     │   auditoría append-only, config de caps
                                   │ crm_opportun. │
-                                  │ audit_log     │   Auth a CRM = Catalyst Connection
-                                  │ consumer_caps │   (OAuth gestionado). Secretos en
-                                  └──────────────┘    Environment Variables, nunca en repo.
+                                  │ audit_log     │   Auth a CRM = self-client OAuth
+                                  │ consumer_caps │   (SDK); secretos en Environment
+                                  └──────────────┘    Variables, nunca en repo.
 ```
 
-La autenticación a Zoho CRM se resuelve por **Catalyst Connection** (OAuth gestionado):
-la función obtiene el `accessToken` y lo pasa al adapter en `CrmConnection`; el adapter
-nunca lee secretos por su cuenta. Detalle de setup: ⚠️ verificar (docs oficiales/consola)
-— ver [docs/playbooks/secretos-y-connections.md](docs/playbooks/secretos-y-connections.md).
+La autenticación a Zoho CRM se resuelve por **self-client OAuth** (el SDK de Catalyst renueva
+el token con `ZOHO_CLIENT_ID/SECRET/REFRESH_TOKEN`; la Catalyst Connection de consola quedó
+descartada por un bug de refresh token): la función obtiene el `accessToken` y lo pasa al adapter
+en `CrmConnection`; el adapter nunca lee secretos por su cuenta. Ver
+[docs/playbooks/secretos-y-connections.md](docs/playbooks/secretos-y-connections.md) y [ADR-0004](docs/decisions/README.md#adr-0004).
 
 ## 3. Monorepo ports & adapters
 
@@ -104,7 +106,7 @@ cardoc-ml/
 | Package | Responsabilidad | Tiene SDK / HTTP / Express |
 |---------|-----------------|----------------------------|
 | `@cardoc/domain` | Lenguaje interno del sistema: tipos (`Scope`, `ContactInput`, `InformeRevision`, …), schemas Zod (`opportunityContactSchema`, `listInformesQuerySchema`), `idempotency.payloadFingerprint`, `tokens.hashToken`/`generateToken`, la constante `FIXED_OPPORTUNITY_STAGE = "Nueva Solicitud"`. | No. Node puro (`node:crypto`, `zod`). |
-| `@cardoc/providers` | Puertos `CrmClient` y `ReportsSource`, errores tipados (`UpstreamError`, `ReportNotFoundError`, `PdfNotAvailableError`, `NotImplementedError`), y los adapters: `MockCrmClient`/`MockReportsSource` (funcionales para dev/test/e2e) y `ZohoCrmClient`/`ZohoCreatorReportsSource` (stubs `NotImplemented`). | **Sí** — es el único lugar autorizado a HTTP externo (CRM/Creator/WorkDrive). |
+| `@cardoc/providers` | Puertos `CrmClient` y `ReportsSource`, errores tipados (`UpstreamError`, `ReportNotFoundError`, `PdfNotAvailableError`, `NotImplementedError`), y los adapters: `MockCrmClient`/`MockReportsSource` (funcionales para dev/test/e2e), `ZohoCrmClient` (**implementado** — E-02) y `ZohoCreatorReportsSource` (stub `NotImplemented` — E-03). | **Sí** — es el único lugar autorizado a HTTP externo (CRM/Creator/WorkDrive). |
 | `@cardoc/persistence` | `entities` (filas del DataStore en camelCase), repositorios = **puertos** (`TokensRepository`, `ConsumersRepository`, `OpportunitiesRepository`, `AuditLogRepository`, `CapRepository`), `catalyst.ts` = impl DataStore, `memory.ts` = fakes in-memory. | DataStore por **tipado estructural** (`CatalystAppLike`), sin importar el SDK. |
 | `@cardoc/application` | Use-cases: `createOpportunityContact`, `listInformes`, `streamReportPdf`. Orquestan dominio + puertos. | No. Solo tipos de los otros packages. |
 | `apps/catalyst/functions/api` | La función: `app.ts` arma el Express, `container.ts` compone dependencias, `middleware/*` y `routes/*`. | **Sí** — único punto que importa `zcatalyst-sdk-node` (en `container.ts`) y monta Express. |
@@ -117,7 +119,8 @@ cardoc-ml/
 2. **HTTP solo en providers.** Toda llamada HTTP a un upstream (CRM, Creator, WorkDrive)
    vive en `packages/providers/`. Los adapters `Zoho*` son los únicos autorizados a `fetch`;
    los puertos son interfaces (`CrmClient`, `ReportsSource`) que el resto consume sin saber
-   el transporte. Hoy esos adapters son stubs `NotImplemented` (E-02/E-03).
+   el transporte. Hoy `ZohoCrmClient` está **implementado** (E-02, validado 5/5 en Catalyst);
+   solo `ZohoCreatorReportsSource` sigue stub `NotImplemented` (E-03).
 
 3. **SDK solo en la función.** `zcatalyst-sdk-node` se importa exactamente una vez, en
    `apps/catalyst/functions/api/src/container.ts` (`catalyst.initialize(req)`).
@@ -132,7 +135,8 @@ cardoc-ml/
 
 > Beneficio operativo: el sistema corre **completo** en local con `MockCrmClient` +
 > `MockReportsSource` + repos in-memory, sin Catalyst ni Zoho. Es lo que hace verde al
-> smoke e2e 16/16 hoy, con los adapters reales aún en stub.
+> smoke e2e local, mientras `ZohoCrmClient` ya corre real contra Catalyst+Zoho (E-02)
+> y solo `ZohoCreatorReportsSource` sigue en stub.
 
 ## 4. Pipeline de un request
 
@@ -206,18 +210,19 @@ es la **partition key lógica** del modelo de runtime: toda query la filtra por 
 |-------|----------|-------|
 | `api_tokens` | `token_hash`, `consumer_id`, `account_id`, `scopes` (JSON), `expires_at`, `last_used_at`, `revoked_at` | Solo el **hash** del token. Rotación = insertar + revocar. |
 | `consumers` | `consumer_id`, `crm_account_id`, `name`, `status` | 1 automotora = 1 consumidor. `crm_account_id` ancla la tenancy. |
-| `crm_opportunities` | `account_id`, `idempotency_key`, `payload_fingerprint`, `contact_id`, `opportunity_id`, `status` (`pending`\|`created`\|`error`), `correlation_id`, `created_at`, `updated_at` | **`UNIQUE(account_id, idempotency_key)`** = red física anti-duplicación. |
-| `audit_log` | `timestamp`, `correlation_id`, `consumer_id`, `account_id`, `endpoint`, `outcome`, `http_status`, `latency_ms`, `error_code` | **Append-only**: la app solo inserta. |
+| `crm_opportunities` | `account_id`, `idempotency_key`, `payload_fingerprint`, `contact_id`, `opportunity_id`, `status` (`pending`\|`created`\|`error`), `correlation_id`, `created_at`, `updated_at` | **`UNIQUE(idempotency_key)`** (single-column; Catalyst no soporta UNIQUE compuesto por UI) = red física anti-duplicación. El filtro por `account_id` es lectura defensiva de tenancy, no parte del constraint. |
+| `audit_log` | `_timestamp`, `correlation_id`, `consumer_id`, `account_id`, `endpoint`, `outcome`, `http_status`, `latency_ms`, `error_code` | **Append-only**: la app solo inserta. `_timestamp` (con guion bajo) porque `timestamp` es nombre de columna **reservado** en Catalyst. |
 | `consumer_caps` | `consumer_id`, `endpoint`, `limit_hour`, `limit_day`, `limit_week` | Solo la **config** del cap; los contadores no viven acá (§7). |
 
 Notas de implementación (de `catalyst.ts`):
 
 - La impl mapea snake_case ↔ camelCase y usa ZCQL para lectura (`executeZCQLQuery`) y
   `insertRow`/`updateRow` para escritura. `scopes` se serializa como JSON string.
-- `insertIfAbsent` intenta el `insertRow`; si el `UNIQUE(account_id, idempotency_key)`
-  rechaza el segundo insert concurrente, relee el existente y devuelve `created: false`.
-- El constraint `UNIQUE(account_id, idempotency_key)` **se crea en la consola de Catalyst**;
-  no lo crea el código. Esquema y migraciones: ⚠️ verificar (docs oficiales/consola) —
+- `insertIfAbsent` intenta el `insertRow`; si el `UNIQUE(idempotency_key)` rechaza el
+  segundo insert concurrente, relee el existente y devuelve `created: false`.
+- El constraint `UNIQUE(idempotency_key)` y **todo el DDL** (tablas y columnas) **se crean en
+  la consola de Catalyst** — es CONSOLE ONLY; el SDK solo hace CRUD de filas sobre tablas
+  existentes, no crea esquema por API. Esquema y migraciones:
   [docs/playbooks/datastore-esquema.md](docs/playbooks/datastore-esquema.md).
 
 Esquema del POST (`schemas.ts`):
@@ -240,7 +245,7 @@ consumidor/token.** La Oportunidad se crea en el módulo Deals, en estado fijo
 | `accountId` SIEMPRE del token | El `account_id` se resuelve en `authMiddleware` y se inyecta en cada use-case/repo como primer argumento. **Jamás** viene del payload/query. |
 | Cross-tenant → 404 | Pedir un informe de otra Cuenta no devuelve 403 (filtraría su existencia): el puerto filtra por `account_id` y devuelve `ReportNotFoundError` → **404 NOT_FOUND**. 403 queda reservado a scope. |
 | Anti-enumeración de Cuenta | `listInformesQuerySchema.strict()`: cualquier intento de pasar un filtro de Cuenta por query → 422. |
-| Secretos | Credenciales del CRM vía **Catalyst Connection** (OAuth gestionado) + Environment Variables; nunca en el repo (`.gitignore` + secret-scanning). El adapter recibe el token resuelto, no lo lee. |
+| Secretos | Credenciales del CRM por **self-client OAuth** (`ZOHO_CLIENT_ID/SECRET/REFRESH_TOKEN` en Environment Variables; el SDK renueva el token); nunca en el repo (`.gitignore` + secret-scanning). El adapter recibe el token resuelto, no lo lee. |
 | Auditoría | Middleware on-finish: 1 registro append-only por request en los 3 endpoints (`correlation_id`, `consumer_id`, `account_id`, `endpoint`, `outcome`, `http_status`, `latency_ms`, `error_code`). Sin payload ni PII. |
 | Sin fuga upstream | El sobre de error usa etiquetas opacas (`crm`/`creator`/`workdrive`); nunca URL, fileId ni ruta interna. El stream del PDF va con `Cache-Control: no-store` y sin redirect 302. |
 
@@ -294,9 +299,14 @@ la ubicación. Si el stream falla **antes** del primer byte → 502 `UPSTREAM_ER
 
 - **TypeScript**: `pnpm exec tsc -b` (project references). Verde verificado en E-01.
 - **Bundling** (`scripts/bundle-function.mjs`): esbuild, `format: cjs`, `target: node24`,
-  `external: ['zcatalyst-sdk-node']` (lo provee el runtime; require lazy en datastore mode).
-  Inlina `express`, `zod` y los `@cardoc/*`. **Catalyst NO instala las deps del `package.json`**
-  — por eso `express` va inlineado (el smoke 2026-06-25 lo confirmó). Genera `index.js` (~1.3 MB). Entry: `src/index.ts` hace
+  a un único `index.js`. **Catalyst NO instala las deps del `package.json`**, así que
+  `express`, `zod` y los `@cardoc/*` van **inlineados** en el bundle. `zcatalyst-sdk-node`
+  es la **excepción**: se **externaliza** (`external`) porque hace `require()` dinámicos de
+  sus submódulos (p.ej. `./zcql/zcql`) que esbuild no puede resolver estáticamente —
+  inlinearlo rompe en runtime con `Cannot find module './zcql/zcql'`. Como el runtime de
+  Catalyst **no** provee el SDK, se **shippea** como `node_modules` real en el function dir
+  (ver *Deploy*, abajo). La lista de externals es única: `scripts/function-externals.mjs`
+  (la consumen `bundle-function.mjs` y `deploy-prep-sdk.mjs`). Entry: `src/index.ts` hace
   `export = app` (CommonJS); Catalyst hace `require(main)`.
 - **Configs**: `apps/catalyst/catalyst.json` `{ functions: { source: 'functions',
   targets: ['api'] } }` · `functions/api/catalyst-config.json` `{ deployment: { name:'api',
@@ -305,8 +315,20 @@ la ubicación. Si el stream falla **antes** del primer byte → 502 `UPSTREAM_ER
   `America/Montevideo`. `package.json` raíz: `pnpm.onlyBuiltDependencies: ['esbuild']`.
 - **Toolchain real**: Node 24.13, pnpm 10.29.2.
 
+- **Deploy** (secuencia verificada, dos pasos):
+  1. `pnpm --filter @cardoc/fn-api predeploy` = build (`tsc` + esbuild bundle) + `deploy:prep`,
+     que **materializa el SDK real**: `scripts/deploy-prep-sdk.mjs` instala el external
+     (`zcatalyst-sdk-node`) y sus transitivas como archivos reales en `node_modules` del
+     function dir (los symlinks de pnpm se rompen al zipear en `catalyst deploy`).
+  2. `cd apps/catalyst && catalyst deploy --only functions:api --ignore-scripts`, con
+     `NODE_OPTIONS=--use-system-ca` (CA corporativa).
+
 > **Gotcha de install** (red corporativa con CA propia / intercepción TLS):
 > `NODE_OPTIONS=--use-system-ca pnpm install`.
+>
+> **Gotcha post-install**: tras cualquier `pnpm install`, pnpm restaura el symlink del SDK
+> → hay que **re-correr `predeploy`** (o `deploy:prep`) antes de deployar, o el runtime
+> falla con `Cannot find module`.
 
 Comandos exactos del CLI `catalyst` (init/deploy) y estructura de configs: confirmados.
 Detalle fino del deploy/rollback: [docs/playbooks/deploy-y-rollback.md](docs/playbooks/deploy-y-rollback.md)
@@ -336,13 +358,13 @@ Confirmadas por Nestor Toñanez, 2026-06-25.
 | 1 | **Catalyst como gateway de control** delante de Zoho; el DataStore guarda control (tokens, idempotencia, auditoría, caps), no negocio | CRM/Creator como única capa, sin gateway | Zoho no provee auth scoped por consumidor, idempotencia, cap ni auditoría uniforme; el gateway las centraliza y deja a Zoho como sistema de registro. |
 | 2 | **Idempotencia en 2 capas:** `X-Idempotency-Key` opcional → DataStore Catalyst (Capa 1: fast-path + `409` payload-distinto) · `EXTERNAL_ID`=NroSolicitud único en el CRM → `DUPLICATE_DATA` (Capa 2: verdad durable) | header único obligatorio / depender solo del middleware | Defensa en profundidad: el header es opt-in al fast-path; el CRM nunca duplica. Ver [ADR-0002](docs/decisions/README.md#adr-0002). |
 | 3 | **Dedup de Contacto por `NroCedula`** (campo `Cedula` custom en Contacts) | email (ML no lo manda) / teléfono | ML manda `NroCedula` y no email; la cédula es la identidad estable. Por eso `NroCedula` es requerido en el schema. |
-| 4 | **Auth a Zoho CRM = Catalyst Connection** (OAuth gestionado) | Token estático en env / OAuth a mano | Catalyst gestiona refresh y rotación; el adapter recibe el `accessToken` resuelto y nunca toca secretos. |
+| 4 | **Auth a Zoho CRM = self-client OAuth (SDK de Catalyst)** | Catalyst Connection de consola (bug de refresh token) / token estático / OAuth a mano | El SDK renueva el token con las creds del self-client en env vars; el adapter recibe el `accessToken` resuelto y nunca toca secretos. |
 | 5 | **Cross-tenant → 404** (no 403) | 403 para acceso cruzado | 403 confirmaría la existencia del recurso ajeno. 404 no filtra; 403 queda reservado a falta de scope. |
 | 6 | **`accountId` siempre del token** | Aceptar `accountId` del payload/query | Es la base de la tenancy: el consumidor no puede elegir Cuenta. Reforzado con `.strict()` en la query. |
 | 7 | **Auditoría on-finish, 1 registro/request, append-only** | Auditar dentro de cada use-case | Captura `httpStatus`/`latencyMs` ya conocidos al cierre; cubre también los GET (sin use-case) y los errores tempranos (401/403/429). |
 | 8 | **Adapter de streaming/SDK en la capa function**, no en `packages/*` | Meter el SDK/stream en `persistence` o `providers` | Mantiene la regla hexagonal: dominio/puertos sin SDK; `persistence` usa el DataStore por tipado estructural. El sistema corre completo en local sin Catalyst. |
 | 9 | **HTTP externo solo en `providers`** (adapters `Zoho*`) | Llamar a Zoho desde use-cases o rutas | Aísla el upstream tras un puerto: los Mock permiten e2e sin Zoho, y los adapters reales entran en E-02/E-03 sin tocar el resto. |
-| 10 | **Bundle esbuild: inlina todo salvo `zcatalyst-sdk-node`** (express incluido; SDK del runtime, lazy) | externalizar `express` (Catalyst no instala las deps del `package.json`) | Smoke 2026-06-25: `express` external daba `Cannot find module`. Único external = `zcatalyst-sdk-node`. |
+| 10 | **Bundle esbuild: inlina todo salvo `zcatalyst-sdk-node`** (express incluido; el SDK se externaliza y se shippea como `node_modules` real, no lo provee el runtime) | externalizar `express` (Catalyst no instala las deps del `package.json`) / inlinar también el SDK | `express` external daba `Cannot find module` (Catalyst no instala deps). Inlinar el SDK rompe por sus `require()` dinámicos; por eso es el único external y se shippea real. |
 | 11 | **Contadores de cap in-memory por ahora** | Bloquear E-01 hasta tener Catalyst Cache | E-01 entrega un cap funcional por-instancia; el cap distribuido (Catalyst Cache, increment atómico) es de-risk pre-producción — ⚠️ verificar. |
 
 ## 11. Pendientes de validación (de-risk pre-producción)

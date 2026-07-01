@@ -8,13 +8,13 @@ last_reviewed: 2026-06-25
 
 Modelo de datos físico de cardoc-ml sobre **Zoho Catalyst DataStore**. Cinco tablas, columnas `snake_case`, accedidas vía ZCQL + DataStore API. Este documento es el contrato entre lo que el código espera (`@cardoc/persistence`) y lo que existe en la consola de Catalyst.
 
-**Regla de oro:** las columnas las define el código en `packages/persistence/src/{entities.ts,catalyst.ts}`. Los **constraints (UNIQUE, índices)** los define **la mano del operador en la consola de Catalyst**. El código no puede crear índices; asume que existen. Si faltan, no hay error de compilación ni de arranque: la idempotencia **falla en silencio** (ver [§4](#4-constraints-que-se-crean-a-mano-crítico)).
+**Regla de oro:** el esquema físico —tablas, columnas, tipos, índices, UNIQUE— es **CONSOLE ONLY**: se define **a mano en la consola de Catalyst**. El SDK **no** crea ni gestiona tablas/columnas/constraints por API; solo hace **CRUD de filas** sobre tablas ya existentes. El código **asume** que columnas e índices ya existen. Si faltan, no hay error de compilación ni de arranque: la idempotencia **falla en silencio** (ver [§4](#4-constraints-que-se-crean-a-mano-crítico)).
 
 Fuente en disco:
 - `packages/persistence/src/entities.ts` — tipos de fila (camelCase del dominio).
 - `packages/persistence/src/catalyst.ts` — impl DataStore (mapeo snake_case ↔ camelCase, ZCQL).
 - `packages/persistence/src/repositories.ts` — puertos.
-- `packages/persistence/src/memory.ts` — fakes in-memory (emulan el UNIQUE compuesto a mano).
+- `packages/persistence/src/memory.ts` — fakes in-memory (emulan idempotencia por **clave compuesta** `account_id|idempotency_key`; son **más estrictos** que el DataStore real, que solo tiene un UNIQUE de una columna).
 
 ---
 
@@ -76,13 +76,13 @@ Una integración = una automotora = una Cuenta CRM (`Accounts`).
 
 ### 2.3 `crm_opportunities`
 
-Red física anti-duplicación del POST. El **UNIQUE compuesto es el corazón** de la idempotencia (ver [§4](#4-constraints-que-se-crean-a-mano-crítico)).
+Red física anti-duplicación del POST. El **`UNIQUE(idempotency_key)`** es el corazón de la idempotencia (ver [§4](#4-constraints-que-se-crean-a-mano-crítico)). Catalyst solo permite UNIQUE de **una columna** por UI, así que el constraint es single-column sobre `idempotency_key`; `account_id` **no** forma parte del índice.
 
 | Columna | Campo dominio | Tipo lógico | Índice / único | Notas |
 |---|---|---|---|---|
-| `account_id` | `accountId` | string | parte de **`UNIQUE(account_id, idempotency_key)`** | Del token, nunca del payload |
-| `idempotency_key` | `idempotencyKey` | string | parte de **`UNIQUE(account_id, idempotency_key)`** | = `String(NroSolicitud)` (del body de ML) |
-| `payload_fingerprint` | `payloadFingerprint` | string (hash) | — | `domain.idempotency.payloadFingerprint`; detecta mismo-NroSolicitud/payload-distinto → 409 |
+| `account_id` | `accountId` | string | — (se filtra en la query como defensa de tenancy, **no** en el índice) | Del token, nunca del payload |
+| `idempotency_key` | `idempotencyKey` | string | **`UNIQUE(idempotency_key)`** (single-column) | = header `X-Idempotency-Key` (lo elige el consumidor; opcional) |
+| `payload_fingerprint` | `payloadFingerprint` | string (hash) | — | `domain.idempotency.payloadFingerprint`; detecta misma-clave/payload-distinto → 409 |
 | `contact_id` | `contactId` | string \| null | — | ID del Contacto CRM (se llena en `markCreated`) |
 | `opportunity_id` | `opportunityId` | string \| null | — | ID del Deal CRM (se llena en `markCreated`) |
 | `status` | `status` | enum `pending` \| `created` \| `error` | — | Texto; máquina de estados del intento |
@@ -94,9 +94,11 @@ Red física anti-duplicación del POST. El **UNIQUE compuesto es el corazón** d
 
 Bitácora escrita por el middleware on-finish: **1 registro por request** en los 3 endpoints (AC-09). Desde la aplicación **solo se hace INSERT** — no hay `UPDATE` ni `DELETE` en el código (`repositories.ts`: *"Append-only: solo inserta. Sin update ni delete."*).
 
+> **`timestamp` es un nombre de columna RESERVADO en Catalyst.** Por eso la tabla usa **`_timestamp`** (con guion bajo); el código escribe y lee `_timestamp`. Crear la columna en consola con ese nombre exacto.
+
 | Columna | Campo dominio | Tipo lógico | Índice / único | Notas |
 |---|---|---|---|---|
-| `timestamp` | `timestamp` | ISO datetime | — | Momento del registro (app) |
+| `_timestamp` | `timestamp` | ISO datetime | — | Momento del registro (app). `timestamp` es reservado → columna `_timestamp` |
 | `correlation_id` | `correlationId` | string (UUID) | índice (búsqueda por traza) | `searchByCorrelationId` |
 | `consumer_id` | `consumerId` | string | — | |
 | `account_id` | `accountId` | string | — | |
@@ -120,7 +122,7 @@ Bitácora escrita por el middleware on-finish: **1 registro por request** en los
 | `limit_day` | `limitDay` | integer \| null | — | null ⇒ `CARDOC_CAP_DEFAULT_DAY` |
 | `limit_week` | `limitWeek` | integer \| null | — | null ⇒ `CARDOC_CAP_DEFAULT_WEEK` |
 
-> Para `consumer_caps` conviene un **UNIQUE(consumer_id, endpoint)** para evitar config duplicada (el código hace `LIMIT 1` y tomaría una fila arbitraria si hubiera dos). Recomendado, no obligatorio para que funcione.
+> Para evitar config duplicada en `consumer_caps` conviene un UNIQUE. Catalyst **no** ofrece UNIQUE compuesto por UI (solo single-column), así que no se puede imponer unicidad sobre el par `(consumer_id, endpoint)` a nivel índice; queda como disciplina de operador (el código hace `LIMIT 1` y tomaría una fila arbitraria si hubiera dos). Recomendado, no obligatorio para que funcione.
 
 ---
 
@@ -142,11 +144,11 @@ ZCQL: las queries son strings literales. Los inputs son server-derived; aun así
 
 ## 4. Constraints que se crean A MANO (crítico)
 
-> El DataStore API del SDK (`insertRow`/`updateRow`/`executeZCQLQuery`) **no crea ni gestiona índices ni constraints**. El esquema físico —columnas, tipos, índices, UNIQUE— se define **en la consola de Catalyst** (o por CLI/import de esquema → ⚠️ verificar si existe ese mecanismo). El código **asume** que el constraint ya existe.
+> El DataStore API del SDK (`insertRow`/`updateRow`/`executeZCQLQuery`) **solo hace CRUD de filas**: **no crea ni gestiona tablas, columnas, índices ni constraints**. El esquema físico —columnas, tipos, índices, UNIQUE— se define **a mano en la consola de Catalyst** (DDL es **CONSOLE ONLY**; no hay API ni CLI de esquema). El código **asume** que el constraint ya existe.
 
 ### El UNIQUE de `crm_opportunities` es no-negociable
 
-La idempotencia (estilo Stripe, AC-08) descansa en **`UNIQUE(account_id, idempotency_key)`**. El mecanismo en `insertIfAbsent` (`catalyst.ts`) es:
+La idempotencia (estilo Stripe, AC-08) descansa en **`UNIQUE(idempotency_key)`**. Catalyst solo ofrece UNIQUE de **una columna** por UI, así que el constraint es single-column sobre `idempotency_key`; el filtrado por `account_id` en el código es **lectura defensiva de tenancy**, no parte del índice. El mecanismo en `insertIfAbsent` (`catalyst.ts`) es:
 
 1. Intenta `insertRow(...)`.
 2. Si el **UNIQUE** rechaza el segundo insert concurrente → cae al `catch`, busca el row existente con `findRaw(accountId, idempotencyKey)` y lo devuelve con `created: false`.
@@ -159,19 +161,19 @@ insertIfAbsent:
 
 **Si el UNIQUE NO existe en consola:** el `insertRow` del segundo request **no falla** → se inserta una fila duplicada → `created: true` ambas veces → se crean **Deals/Contactos duplicados** en CRM. **No hay excepción, no hay log de error, no hay 409.** La idempotencia **falla en silencio**. Es exactamente el modo de falla más caro y más difícil de detectar en producción.
 
-El fake `InMemoryOpportunitiesRepository` (`memory.ts`) **emula** este UNIQUE a mano con un `Map` keyed por `` `${accountId}|${idempotencyKey}` ``. Por eso los tests pasan aunque el DataStore real no tenga el índice: **el verde de los tests NO prueba que el constraint exista en Catalyst.** Verificarlo es trabajo de consola.
+El fake `InMemoryOpportunitiesRepository` (`memory.ts`) emula la idempotencia con un `Map` keyed por la **clave compuesta** `` `${accountId}|${idempotencyKey}` ``, así que el fake es **más estricto** que el DataStore real (que solo tiene UNIQUE de una columna, `idempotency_key`). Por eso los tests pasan aunque el DataStore real no tenga el índice: **el verde de los tests NO prueba que el constraint exista en Catalyst.** Verificarlo es trabajo de consola.
 
 ### Inventario de constraints/índices a crear a mano
 
 | Tabla | Constraint / índice | Obligatorio | Consecuencia si falta |
 |---|---|---|---|
-| `crm_opportunities` | **`UNIQUE(account_id, idempotency_key)`** | **Sí** | Idempotencia falla en silencio → duplicados en CRM |
+| `crm_opportunities` | **`UNIQUE(idempotency_key)`** (single-column) | **Sí** | Idempotencia falla en silencio → duplicados en CRM |
 | `api_tokens` | UNIQUE(`token_hash`) + índice lookup | Recomendado | Tokens duplicados; lookup más lento |
 | `consumers` | UNIQUE(`consumer_id`), UNIQUE(`crm_account_id`) | Recomendado | Tenancy ambigua; `getByAccountId` arbitrario |
-| `consumer_caps` | UNIQUE(`consumer_id`, `endpoint`) | Recomendado | Config de cap duplicada; `LIMIT 1` toma una al azar |
+| `consumer_caps` | UNIQUE(`consumer_id`), UNIQUE(`endpoint`) | Recomendado | Config de cap duplicada; `LIMIT 1` toma una al azar |
 | `audit_log` | índice(`correlation_id`) | Recomendado | `searchByCorrelationId` lento (full scan) |
 
-> Sintaxis/UI exacta para crear un UNIQUE compuesto en Catalyst DataStore → ⚠️ verificar (consola Catalyst / docs oficiales). Lo confirmado por el repo es que el código **depende** de él, no cómo se crea.
+> Catalyst **solo permite UNIQUE de una columna** por UI (no hay UNIQUE compuesto). Por eso el constraint de idempotencia es single-column sobre `idempotency_key`. Lo confirmado por el repo es que el código **depende** de él; se crea a mano en la consola (DDL CONSOLE ONLY).
 
 ---
 
@@ -180,12 +182,12 @@ El fake `InMemoryOpportunitiesRepository` (`memory.ts`) **emula** este UNIQUE a 
 Para levantar el DataStore de un entorno limpio (nuevo proyecto Catalyst). Mecánica fina de cada paso en consola → ⚠️ verificar (docs oficiales); el **qué** está anclado al código.
 
 - [ ] **Crear las 5 tablas** con los nombres EXACTOS: `api_tokens`, `consumers`, `crm_opportunities`, `audit_log`, `consumer_caps` (literales en `catalyst.ts`).
-- [ ] **Columnas por tabla** según [§2](#2-esquema-por-tabla), en `snake_case`, con tipo físico compatible (texto para JSON/ISO-string; entero para `http_status`/`latency_ms`/límites).
-- [ ] **UNIQUE(account_id, idempotency_key)** en `crm_opportunities` — **paso que no se puede saltear** ([§4](#4-constraints-que-se-crean-a-mano-crítico)).
+- [ ] **Columnas por tabla** según [§2](#2-esquema-por-tabla), en `snake_case`, con tipo físico compatible (texto para JSON/ISO-string; entero para `http_status`/`latency_ms`/límites). Ojo: `audit_log` usa **`_timestamp`** (el nombre `timestamp` es reservado).
+- [ ] **UNIQUE(idempotency_key)** (single-column) en `crm_opportunities` — **paso que no se puede saltear** ([§4](#4-constraints-que-se-crean-a-mano-crítico)). Catalyst no tiene UNIQUE compuesto por UI; `account_id` se filtra en la query, no en el índice.
 - [ ] UNIQUE/índices recomendados del inventario de [§4](#inventario-de-constraintsíndices-a-crear-a-mano).
 - [ ] **`audit_log` como append-only de hecho:** restringir permisos de UPDATE/DELETE del rol de la función si la plataforma lo permite → ⚠️ verificar (consola Catalyst).
-- [ ] **Sembrar `consumers` + `api_tokens`** del primer consumidor real (en dev hay un token sembrado en memoria: `X-Api-Key: test-token`, Cuenta `acc_dev`, todos los scopes — vía `seed()` del fake, **no** toca el DataStore).
-- [ ] **`consumer_caps`** opcional: si no hay fila, el middleware cae a `CARDOC_CAP_DEFAULT_HOUR/DAY/WEEK`. Crear filas solo para overrides por consumidor.
+- [ ] **Sembrar `api_tokens` — OBLIGATORIO.** Las tablas se crean **vacías**; sin al menos la fila de `api_tokens` toda alta devuelve **401 "token inválido"**. Sembrar vía **"Add Row"** en la consola, **NO por CSV import** (el campo `scopes` es JSON con comas/comillas que el importador CSV rompe). Valores del token de prueba: `token_hash` = sha256(`"test-token"`) = `4c5dc9b7...031e`, `consumer_id` = `consumer_ml`, `account_id` = `6687138000031320073`, `scopes` = `["opportunities:create","reports:read","reports:pdf"]`, demás columnas vacías. (En dev con `CARDOC_PERSISTENCE=memory` hay un token sembrado por `seed()` del fake, `X-Api-Key: test-token`, que **no** toca el DataStore.)
+- [ ] **`consumers` / `consumer_caps` NO son necesarias para el alta.** El cap cae a defaults (`CARDOC_CAP_DEFAULT_HOUR/DAY/WEEK`) sin fila; `consumers` lo usa el webhook interno (E-07), no el POST de alta. Crear filas solo para overrides por consumidor.
 - [ ] **Variable de entorno** `CARDOC_PERSISTENCE=datastore` en el entorno con DataStore (vs `memory` para local/tests). Ver [secretos-y-connections.md](secretos-y-connections.md).
 - [ ] **Smoke de verificación del UNIQUE:** disparar dos veces el POST con el mismo `NroSolicitud` y verificar que el segundo devuelve `created: false` / 409 — **no** una segunda fila. Es la única prueba real de que el constraint existe.
 - [ ] **Backup/export del DataStore** y **retención de `audit_log`** definidos antes de producción → ⚠️ verificar (de-risk en [OPERACIONES.md](../../OPERACIONES.md)).

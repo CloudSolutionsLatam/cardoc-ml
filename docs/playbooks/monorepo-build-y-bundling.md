@@ -174,14 +174,18 @@ Atajos equivalentes:
 | Etapa | Comando | Entrada | Salida |
 |-------|---------|---------|--------|
 | Compilar el monorepo | `pnpm exec tsc -b` | `packages/*/src`, `apps/.../api/src` | un `dist/` con `.js` + `.d.ts` por proyecto |
-| Bundlear la función | `node scripts/bundle-function.mjs api` (cwd = carpeta de la función) | `apps/.../api/src/index.ts` + deps `@cardoc/*` | `apps/.../api/index.js` (~1.3 MB) + `index.js.map` |
-| Desplegar | `catalyst deploy` | `index.js` + `package.json` de la función | función `api` en el env activo |
+| Bundlear la función | `node scripts/bundle-function.mjs api` (cwd = carpeta de la función) | `apps/.../api/src/index.ts` + deps `@cardoc/*` | `apps/.../api/index.js` + `index.js.map` |
+| Shipear el SDK real | `node scripts/deploy-prep-sdk.mjs` (cwd = carpeta de la función) | externals de `function-externals.mjs` | `apps/.../api/node_modules` con el SDK real (§4.4) |
+| Desplegar | `catalyst deploy` | `index.js` + `node_modules` (SDK) + `catalyst-config.json` | función `api` en el env activo |
 
-El comando que junta los dos primeros pasos en uno, tal como lo declara `@cardoc/fn-api`:
+El comando que junta compilación + bundle es `build`; el que además materializa el SDK real y deja todo listo para deployar es `predeploy`, tal como lo declara `@cardoc/fn-api`:
 
 ```bash
 pnpm --filter @cardoc/fn-api run build
 # → tsc -b && node ../../../../scripts/bundle-function.mjs api  → index.js
+
+pnpm --filter @cardoc/fn-api run predeploy
+# → pnpm build && pnpm deploy:prep  (deploy:prep = node ../../../../scripts/deploy-prep-sdk.mjs)
 ```
 
 `index.js` e `index.js.map` están **gitignored** (`apps/catalyst/functions/*/index.js`): se generan en cada deploy, no se versionan.
@@ -194,7 +198,7 @@ Esta es la decisión central del playbook.
 
 ### 4.1 El problema
 
-Cuando `catalyst deploy` empaqueta una function, instala dependencias leyendo el `package.json` **de la función**. Ese `package.json` tiene `@cardoc/*` declarados como `workspace:*`:
+Cuando `catalyst deploy` empaqueta una function, **no instala las dependencias** del `package.json` de la función: zipea el directorio tal como está y lo sube. Ese `package.json` tiene `@cardoc/*` declarados como `workspace:*`:
 
 ```json
 "devDependencies": {
@@ -205,13 +209,15 @@ Cuando `catalyst deploy` empaqueta una function, instala dependencias leyendo el
 }
 ```
 
-`workspace:*` es un specifier propio de pnpm que solo tiene sentido dentro del monorepo (resuelve por symlink). El instalador de Catalyst **no lo entiende** — no existe en ningún registry. Si desplegáramos el `tsc` plano (`dist/index.js` con `require("@cardoc/application")`), la función explotaría en runtime con `Cannot find module '@cardoc/application'`.
+`workspace:*` es un specifier propio de pnpm que solo tiene sentido dentro del monorepo (resuelve por symlink) — no existe en ningún registry. Si desplegáramos el `tsc` plano (`dist/index.js` con `require("@cardoc/application")`), la función explotaría en runtime con `Cannot find module '@cardoc/application'`, porque en el runtime no hay ningún `@cardoc/*` (nadie los instaló ni viajaron en el zip). De ahí que todo lo interno tenga que quedar **inlineado** en el bundle.
 
-### 4.2 La solución: inlinear las deps internas, externalizar las del registry
+### 4.2 La solución: inlinear TODO salvo el SDK, que se externaliza y se shippea
 
 `scripts/bundle-function.mjs` corre esbuild con esta configuración exacta:
 
 ```js
+import { EXTERNALS } from "./function-externals.mjs";
+
 await build({
   entryPoints: [resolve(cwd, "src/index.ts")],
   outfile: resolve(cwd, "index.js"),
@@ -220,11 +226,14 @@ await build({
   target: "node24",
   format: "cjs",
   sourcemap: true,
-  // zcatalyst-sdk-node lo provee el runtime; express y el resto se inlinean (Catalyst no instala deps).
-  external: ["zcatalyst-sdk-node"],
+  // Catalyst NO instala las deps del package.json: express, zod y los @cardoc/* se inlinan.
+  // El SDK es la EXCEPCIÓN: no se puede inlinar (require dinámicos) → externalizado + shippeado.
+  external: EXTERNALS, // ["zcatalyst-sdk-node"] — ver scripts/function-externals.mjs
   logLevel: "info",
 });
 ```
+
+La lista de externals **no** se escribe a mano en este script: vive en `scripts/function-externals.mjs`, que es la **fuente única** (la consumen tanto `bundle-function.mjs` como `deploy-prep-sdk.mjs`, ver §4.4). Hoy contiene un solo paquete: `zcatalyst-sdk-node`.
 
 Decisiones, una por una:
 
@@ -234,30 +243,43 @@ Decisiones, una por una:
 | `format` | `cjs` | La función expone `export = app` (CommonJS); Catalyst Advanced I/O carga el módulo como CJS. |
 | `target` | `node24` | El runtime del stack es node24 (ver `catalyst-config.json`). No transpilar de más. |
 | `platform` | `node` | Resolución y builtins de Node, no de browser. |
-| `external` | `["zcatalyst-sdk-node"]` | **No se inlinea.** Lo provee el runtime de Catalyst. (`express` y el resto SÍ se inlinean: Catalyst **no** instala las deps del `package.json`.) |
+| `external` | `EXTERNALS` (`["zcatalyst-sdk-node"]`) | **No se inlinea** porque el SDK hace `require()` dinámicos de sus submódulos (p.ej. `./zcql/zcql`) que esbuild no puede resolver estáticamente. El runtime de Catalyst **tampoco lo provee**: se shippea como `node_modules` real vía `deploy-prep-sdk.mjs` (§4.4). Todo lo demás (`express`, `zod`, `@cardoc/*`) SÍ se inlinea, porque Catalyst **no** instala las deps del `package.json`. |
 | `sourcemap` | `true` | Genera `index.js.map` para que los stack traces de runtime mapeen al TS. |
 
 ### 4.3 La frontera externals vs. inlineados
 
 Es la línea que hay que entender:
 
-- **External (solo `zcatalyst-sdk-node`)** → queda como `require(...)` en el bundle (lazy, en datastore mode); lo provee el runtime de Catalyst. `express` y el resto se **inlinan** porque Catalyst **no** instala las deps del `package.json` (el smoke lo confirmó: `express` external → `Cannot find module`). No bundlear el SDK del host.
-- **Inlineado (todo el resto)** → `@cardoc/*` y sus dependencias transitivas que vienen del registry (p.ej. `zod`, que usa `@cardoc/domain`) se copian dentro de `index.js`. Por eso el `package.json` desplegado no las necesita.
+- **External (solo `zcatalyst-sdk-node`)** → queda como `require("zcatalyst-sdk-node")` en el bundle. No se inlina porque el SDK hace `require()` dinámicos de sus submódulos (p.ej. `./zcql/zcql`) que esbuild no resuelve estáticamente: inlinarlo revienta en runtime con `Cannot find module './zcql/zcql'`. Y el runtime de Catalyst **no lo provee**: si se externaliza pero no se shippea, revienta con `Cannot find module 'zcatalyst-sdk-node'`. La salida es shipearlo como `node_modules` real (§4.4).
+- **Inlineado (todo el resto)** → `express`, y `@cardoc/*` con sus dependencias transitivas que vienen del registry (p.ej. `zod`, que usa `@cardoc/domain`), se copian dentro de `index.js`. Catalyst **no** instala las deps del `package.json`, así que si algo no está inlineado y no se shippea, no existe en runtime.
 
-Resultado: un `index.js` autocontenido (~1.3 MB) que en runtime solo hace `require("zcatalyst-sdk-node")` (lazy, en datastore mode) — que el runtime de Catalyst provee (express va inlineado). Cero `workspace:*`, cero `node_modules` interno que llevar.
+Resultado: un `index.js` autocontenido que en runtime solo hace `require("zcatalyst-sdk-node")` — resuelto contra el `node_modules` real que materializa `deploy-prep-sdk.mjs`. Cero `workspace:*`, cero dependencia del registry que Catalyst tenga que instalar.
 
 > Corolario de diseño: el adapter de streaming / SDK vive **en la capa function**, no en `packages/*`. Los packages son Node puro y testeables; el acoplamiento a Catalyst se concentra en `fn-api`, que es justamente lo que el bundle empaqueta. Ver [`../../ARQUITECTURA.md`](../../ARQUITECTURA.md).
+
+### 4.4 Shipear el SDK como `node_modules` real (`deploy-prep-sdk.mjs`)
+
+Externalizar el SDK no alcanza: hay que **entregarlo** junto al bundle, porque el runtime de Catalyst no lo provee. `scripts/deploy-prep-sdk.mjs` materializa cada external de `function-externals.mjs` (con sus transitivas) como **archivos reales** dentro de `apps/catalyst/functions/api/node_modules`:
+
+1. Arma un staging aislado con un `package.json` mínimo que declara solo los externals (versión exacta tomada del `package.json` de la función, la fuente de verdad).
+2. Corre `npm install` en ese staging → resuelve el closure completo (external + transitivas) como archivos flat.
+3. Copia cada paquete al `node_modules` de la función, **reemplazando el symlink de pnpm**.
+
+Por qué el symlink no sirve: pnpm resuelve `zcatalyst-sdk-node` como un symlink que apunta fuera de la carpeta de la función. Cuando `catalyst deploy` zipea el directorio, el symlink apunta **afuera del zip** → en runtime da `Cannot find module 'zcatalyst-sdk-node'` (o `'./zcql/zcql'`). Copiar archivos reales hace que el SDK viaje dentro del zip.
+
+> ⚠️ Gotcha de idempotencia: cualquier `pnpm install` **restaura el symlink** de pnpm y "des-materializa" lo que dejó este script. Por eso `deploy:prep` se re-corre siempre antes de deployar (está encadenado en `predeploy`, ver §5 y §7). Si deployás tras un `pnpm install` sin re-correr `predeploy`/`deploy:prep`, el runtime vuelve a fallar con `Cannot find module`.
 
 ---
 
 ## 5. Artefactos de deploy de la función
 
-El bundle por sí solo no se despliega: Catalyst necesita su metadata. Los tres archivos que conviven en `apps/catalyst/functions/api/`:
+El bundle por sí solo no se despliega: Catalyst necesita su metadata, y el SDK tiene que viajar en el zip. Lo que convive en `apps/catalyst/functions/api/` al deployar:
 
 | Archivo | Rol |
 |---------|-----|
 | `index.js` (generado) | El bundle CJS que ejecuta el runtime. `catalyst-config.json` lo apunta con `execution.main`. |
-| `package.json` | Declara `main: index.js`. (Catalyst **no** instala estas deps en deploy — el bundle es autocontenido salvo `zcatalyst-sdk-node`, que provee el runtime.) |
+| `node_modules/` (generado) | El SDK real (`zcatalyst-sdk-node` + transitivas) que materializa `deploy-prep-sdk.mjs` (§4.4). Es lo que resuelve el `require("zcatalyst-sdk-node")` externalizado; viaja dentro del zip. |
+| `package.json` | Declara `main: index.js`. Catalyst **no** instala estas deps en deploy: el bundle es autocontenido salvo `zcatalyst-sdk-node`, que se shippea como `node_modules` real (no lo provee el runtime). |
 | `catalyst-config.json` | `{ deployment: { name: "api", stack: "node24", type: "advancedio" }, execution: { main: "index.js" } }` |
 
 A nivel proyecto, `apps/catalyst/catalyst.json` declara qué functions se despliegan:
@@ -268,7 +290,7 @@ A nivel proyecto, `apps/catalyst/catalyst.json` declara qué functions se despli
 
 El binding al proyecto/env real (`.catalystrc`) está **gitignored**; se versiona solo `.catalystrc.example` (timezone `America/Montevideo`). El detalle completo de artefactos Catalyst está en [`./catalyst-artefactos.md`](./catalyst-artefactos.md); el flujo de publicación y vuelta atrás en [`./deploy-y-rollback.md`](./deploy-y-rollback.md).
 
-> ⚠️ verificar (docs oficiales/consola): el comportamiento exacto de `catalyst deploy` al resolver e instalar las `dependencies` del `package.json` de la función (gestor, lockfile, si respeta versiones pinneadas), y el tope de tamaño del artefacto / payload en Advanced I/O. El CLI (`catalyst init` / `catalyst deploy`) y la estructura de configs están confirmados; estos detalles finos del empaquetado no.
+> ⚠️ verificar (docs oficiales/consola): el tope de tamaño del artefacto / payload en Advanced I/O. Que `catalyst deploy` **no** instala las `dependencies` del `package.json` (solo zipea el directorio) está confirmado por el smoke — por eso hay que shipear el SDK como `node_modules` real (§4.4). El CLI (`catalyst init` / `catalyst deploy`) y la estructura de configs también están confirmados; el límite de tamaño no.
 
 ---
 
@@ -310,17 +332,21 @@ NODE_OPTIONS=--use-system-ca pnpm install
 pnpm exec tsc -b
 
 # 3. Calidad
-pnpm -r run test      # 7 tests (vitest)
+pnpm -r run test      # suite local (vitest)
 pnpm lint             # eslint .
 
-# 4. Bundlear la función para deploy
-pnpm --filter @cardoc/fn-api run build   # tsc -b + esbuild → index.js (~1.3 MB)
+# 4. Preparar el deploy: build (tsc -b + esbuild → index.js) + materializar el SDK real
+#    OJO: si corriste `pnpm install` (paso 1), esto RE-materializa el SDK (§4.4). No lo salteés.
+pnpm --filter @cardoc/fn-api run predeploy   # = pnpm build && pnpm deploy:prep
 
-# 5. Deploy (desde apps/catalyst, con .catalystrc vinculado)
-catalyst deploy
+# 5. Deploy (desde apps/catalyst, CA corporativa)
+cd apps/catalyst
+NODE_OPTIONS=--use-system-ca catalyst deploy --only functions:api --ignore-scripts
 ```
 
-Estado verificado en verde al `2026-06-25`: `tsc -b`, 7 tests, eslint, smoke e2e 16/16, bundle esbuild. Si alguno de estos falla tras un cambio, el sospechoso #1 es desalineación entre `dependencies` (`workspace:*`) y `references` (§2.4) o un externals mal puesto en el bundle (§4.2).
+> ⚠️ Orden no negociable: `predeploy` **después** de cualquier `pnpm install`. Un `pnpm install` restaura el symlink de pnpm y "des-materializa" el SDK (§4.4); si deployás sin re-correr `predeploy`, el runtime falla con `Cannot find module`.
+
+Estado verificado en verde al `2026-06-25`: `tsc -b`, suite local (25 tests) + smoke local 21/21, eslint, bundle esbuild, y alta real en Catalyst (datastore + Zoho) vía `scripts/smoke-catalyst-crm.mjs` 5/5. Si alguno falla tras un cambio, el sospechoso #1 es desalineación entre `dependencies` (`workspace:*`) y `references` (§2.4), un externals mal puesto en el bundle (§4.2), o haber deployado sin re-correr `predeploy` tras un `pnpm install` (§4.4).
 
 ---
 

@@ -8,9 +8,10 @@ last_reviewed: 2026-06-25
 
 Modelo de operación del servicio: cómo se opera, se despliega, se incorpora una
 automotora nueva, se monitorea y se responde ante incidentes. Documento vivo: el
-sistema está en **scaffolding deployable** (E-01 completo; E-02/E-03 con lógica y
-puertos listos pero adapters reales de Zoho como stubs `NotImplemented`). Todo
-procedimiento marcado **⚙️** se completa con valores concretos durante E-02/E-03 y se
+sistema está **deployado y validado end-to-end en Catalyst** (E-01 completo; E-02
+completo — `ZohoCrmClient` implementado y validado con alta real en CRM+DataStore).
+Solo `ZohoCreatorReportsSource` (E-03) sigue como stub `NotImplemented`. Todo
+procedimiento marcado **⚙️** se completa con valores concretos durante E-03 y se
 valida con dry-run antes de producción — un runbook no probado no es un runbook.
 
 Toda afirmación de plataforma marcada **⚠️ verificar** debe confirmarse contra la
@@ -41,8 +42,8 @@ El entorno lo gobiernan las **variables de entorno** (no flags de código): `CAR
 
 - **Nadie edita funciones en la consola de Catalyst.** Todo cambio entra por **git + CI**.
   Código editado en plataforma = código perdido en el próximo `catalyst deploy`.
-- **Secretos jamás en el repo.** Viven en Catalyst Console → Environment Variables y en
-  la Catalyst Connection. El `.gitignore` bloquea `.env*` (salvo `.env.example`) y `.catalystrc`;
+- **Secretos jamás en el repo.** Viven en Catalyst Console → Environment Variables (incluidas las
+  creds del self-client OAuth a CRM). El `.gitignore` bloquea `.env*` (salvo `.env.example`) y `.catalystrc`;
   el binding real del proyecto vive en `.catalystrc` (gitignored), nunca en `.catalystrc.example`.
 - **PII de automotoras reales jamás en `local`/`dev`.** Los tests usan datos sintéticos y
   Mock CRM/Reports.
@@ -65,7 +66,7 @@ PR → CI (typecheck + tests + lint + gitleaks) → merge a main → deploy a de
 | Gate | Comando | Qué protege |
 |------|---------|-------------|
 | Typecheck | `pnpm -r run typecheck` | Tipos en los 4 packages + la función. |
-| Test | `pnpm -r run test` | 7 tests (vitest): idempotencia + use-case del POST. |
+| Test | `pnpm -r run test` | 25 tests (vitest) + smoke local 21/21: idempotencia + use-case del POST. |
 | Lint | `pnpm run lint` (`eslint .`) | Fronteras hexagonales (puertos/adapters). |
 | Secret-scan | gitleaks (Docker, historia completa) | Que ningún secreto entre al repo. |
 
@@ -78,17 +79,34 @@ pnpm --filter @cardoc/fn-api run build   # tsc -b (project references) + esbuild
 ```
 
 El build corre `tsc -b` y luego `scripts/bundle-function.mjs` (esbuild, `format: cjs`,
-`target: node24`, `external: ['zcatalyst-sdk-node']`) → genera
-`apps/catalyst/functions/api/index.js` bundleado (~1.3 MB). Ese `index.js` está
+`target: node24`) → genera un único `apps/catalyst/functions/api/index.js` bundleado.
+`express`, `zod` y los workspace `@cardoc/*` se **inlinan** en el bundle (Catalyst NO
+instala las deps del `package.json`). La **única excepción** es `zcatalyst-sdk-node`: se
+**externaliza** (hace `require()` dinámicos de submódulos —p.ej. `./zcql/zcql`— que esbuild
+no puede resolver estáticamente; inlinarlo rompe en runtime con `Cannot find module './zcql/zcql'`).
+La lista de externals vive en `scripts/function-externals.mjs` (fuente **única**, la consumen
+`bundle-function.mjs` y `deploy-prep-sdk.mjs`). Como Catalyst tampoco provee el SDK en el
+runtime, se **shippea como `node_modules` real** en el function dir vía
+`scripts/deploy-prep-sdk.mjs` (instala el external + sus transitivas como archivos reales;
+los symlinks de pnpm se rompen al zipear en `catalyst deploy`). Ese `index.js` está
 **gitignored**: se regenera en cada deploy, nunca se versiona. El root `package.json`
 fija `pnpm.onlyBuiltDependencies: ['esbuild']`.
 
-**Deploy:**
+**Deploy** (secuencia verificada):
 
 ```bash
 catalyst init     # 1ª vez por entorno: vincula proyecto/env (genera .catalystrc local)
-catalyst deploy   # sube la función api (stack node24, type advancedio)
+
+# Paso 1 — build (tsc + esbuild bundle) + deploy:prep (materializa el SDK real):
+pnpm --filter @cardoc/fn-api predeploy
+
+# Paso 2 — deploy de la función api (stack node24, type advancedio):
+cd apps/catalyst
+NODE_OPTIONS=--use-system-ca catalyst deploy --only functions:api --ignore-scripts
 ```
+
+- **GOTCHA:** tras cualquier `pnpm install`, pnpm restaura el symlink del SDK → RE-correr
+  `predeploy` (o `deploy:prep`) antes de deployar, o el runtime falla con `Cannot find module`.
 
 Configs versionadas: `apps/catalyst/catalyst.json` (`functions.source: 'functions'`,
 `targets: ['api']`) y `apps/catalyst/functions/api/catalyst-config.json`
@@ -114,7 +132,7 @@ token resuelto; acceso cruzado → **404** (no 403). Target: alta sin tocar cód
 | 2 | Alta del `consumer` | `consumers(consumer_id, crm_account_id, name, status='active')` en el DataStore | Fila visible; `crm_account_id` apunta al paso 1. |
 | 3 | Generar token + cargar su hash | `generateToken()` (base64url, ≥256 bits) → entregar **una sola vez** al integrador; persistir solo `hashToken()` (sha256) | El token plano **nunca** se guarda ni se loguea. |
 | 4 | Definir scopes del token | `api_tokens(token_hash, consumer_id, account_id, scopes[JSON], expires_at)` | Scopes según lo que la automotora usará (ver tabla scopes abajo). |
-| 5 | Cargar credenciales CRM/Creator | Catalyst Connection (`ZOHO_CRM_CONNECTOR_NAME=zoho_crm_conn`, OAuth gestionado por Catalyst) + Environment Variables (`ZOHO_CRM_API_DOMAIN`, etc.) | El secreto vive en plataforma, no en repo. Procedimiento detallado: [secretos-y-connections.md](docs/playbooks/secretos-y-connections.md). |
+| 5 | Cargar credenciales CRM/Creator | Self-client OAuth: `ZOHO_CLIENT_ID/SECRET/REFRESH_TOKEN` (+ `ZOHO_CRM_API_DOMAIN`, `ZOHO_CRM_CONNECTOR_NAME`) en Environment Variables; el SDK renueva el token en runtime | El secreto vive en plataforma, no en repo. Procedimiento detallado: [secretos-y-connections.md](docs/playbooks/secretos-y-connections.md). |
 | 6 | Cap por consumidor (opcional) | `consumer_caps(consumer_id, endpoint, limit_hour, limit_day, limit_week)`; sin fila → defaults de env (`CARDOC_CAP_DEFAULT_*`: 1000/h, 10000/d, 50000/sem) | Cap razonable para el volumen esperado. |
 | 7 | Pruebas funcionales con el token real | `POST /v1/opportunity-contact` (payload AutoCheck), `GET /v1/informes`, `GET /v1/informes/:id/pdf` | 2xx donde corresponde; cross-tenant probado → 404; sin scope → 403; idempotencia (repetir mismo `NroSolicitud`) → mismo resultado. |
 | 8 | Verificar trazabilidad | Reconstruir un request de prueba por `correlationId` en `audit_log` | El registro on-finish existe (status + latencia + correlationId). |
@@ -128,10 +146,16 @@ token resuelto; acceso cruzado → **404** (no 403). Target: alta sin tocar cód
 | `reports:read` | `GET /v1/informes` |
 | `reports:pdf` | `GET /v1/informes/:id/pdf` |
 
-> El esquema exacto de tablas y columnas del DataStore (incluido el
-> `UNIQUE(account_id, idempotency_key)` que se crea en la consola) está en
-> [docs/playbooks/datastore-esquema.md](docs/playbooks/datastore-esquema.md). El
-> mecanismo concreto de alta de filas (consola vs script de seed) **⚙️** se define en E-02.
+> El esquema exacto de tablas y columnas del DataStore está en
+> [docs/playbooks/datastore-esquema.md](docs/playbooks/datastore-esquema.md). El DDL
+> (tablas/columnas/índices) es **CONSOLE ONLY** — el SDK solo hace CRUD de filas sobre
+> tablas ya existentes. La idempotencia Capa 1 se apoya en un `UNIQUE(idempotency_key)`
+> single-column (Catalyst no ofrece UNIQUE compuesto por UI); el filtrado por
+> `(account_id, idempotency_key)` en el código es lectura defensiva de tenancy, no el
+> constraint del índice. La columna de auditoría se llama `_timestamp` (`timestamp` es
+> nombre reservado en Catalyst). **Seed obligatorio:** las tablas se crean vacías; el alta
+> necesita al menos la fila de `api_tokens` (sin ella el auth devuelve 401), sembrada vía
+> "Add Row" en la consola —no por CSV import, que rompe el JSON de `scopes`.
 
 ## 4. Monitoreo
 
@@ -198,7 +222,7 @@ Catálogo: `VALIDATION_ERROR` 400 · `UNAUTHENTICATED` 401 · `FORBIDDEN_SCOPE` 
 | Qué | Cadencia | Cómo | Responsable ⚙️ |
 |-----|----------|------|----------------|
 | Token de API de automotora | ≤ 90 días o ante sospecha | **Rotación sin downtime**: `create()` un token nuevo (entregar al integrador) → confirmar tráfico con el nuevo → `revoke()` el viejo (setea `revoked_at`). El middleware de auth rechaza tokens con `revoked_at` o `expires_at` vencido. | Operador |
-| Credenciales Zoho (Connection OAuth) | Según política de la Connection; mínimo anual | Rotar en la Catalyst Connection (`zoho_crm_conn`) — el access token lo gestiona Catalyst, no se hardcodea. Ver [secretos-y-connections.md](docs/playbooks/secretos-y-connections.md). **Mecanismo exacto ⚠️ verificar.** | Admin |
+| Credenciales Zoho (self-client OAuth) | Mínimo anual o ante sospecha | Rotar el `ZOHO_REFRESH_TOKEN` (y client id/secret si aplica) en Environment Variables → redeploy. El access token lo renueva el SDK en runtime, no se hardcodea. Ver [secretos-y-connections.md](docs/playbooks/secretos-y-connections.md). | Admin |
 | Environment Variables sensibles | Ante sospecha / cambio de credencial upstream | Actualizar en Catalyst Console → redeploy. Nunca en repo. | Admin |
 | Revisión de accesos (tokens vigentes, scopes) | Trimestral | `listByConsumer()` por consumidor; revocar tokens muertos (`last_used_at` viejo) | Admin |
 | Dry-run de restore del DataStore | Semestral | Según el mecanismo de backup/export validado | Equipo |
@@ -225,16 +249,18 @@ correctiva (mínimo: qué pasó, por qué, qué cambia). Owner del servicio dura
 ## 8. Open questions de plataforma (gates pre-producción)
 
 Estos puntos **no están resueltos** y bloquean el paso a producción. No se operan por
-suposición; se de-riskean en E-02/E-03 con validación en consola/docs oficiales.
+suposición; se de-riskean en E-03 con validación en consola/docs oficiales.
 
-**Negocio (E-02/E-03) — no inventar, definir con el cliente:**
+**Negocio (E-03) — no inventar, definir con el cliente:**
 
 - **Generación de PDF**: cuando `Analisis.pdf_url` está vacío hay que generar el PDF en
   Catalyst y hacer write-back a `Analisis.pdf_url` → luego stream. Falta definir el
   generador (plantilla nativa de Creator vs HTML→PDF en Catalyst vs servicio existente) y
   de qué datos sale. Relación entre los forms `Informes` y `Analisis` en Creator.
-- **CRM**: API names exactos de los módulos estándar Contacts/Deals/Accounts. ✅ Stage de la Deal
-  = `Nueva Solicitud` (confirmado, provisional); campos custom `Cedula` y `EXTERNAL_ID` creados.
+- **CRM**: ✅ **resuelto y validado end-to-end** (E-02) — alta real en Catalyst
+  (DataStore+Zoho) con `ZohoCrmClient` implementado. Stage de la Deal = `Nueva Solicitud`;
+  campos custom `Cedula` y `EXTERNAL_ID` creados; idempotencia Capa 1 (`X-Idempotency-Key`)
+  y Capa 2 (dedup por `EXTERNAL_ID`) verificadas.
 
 **Plataforma Catalyst — ⚠️ verificar (docs/consola oficiales):**
 

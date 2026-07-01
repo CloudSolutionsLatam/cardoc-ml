@@ -77,7 +77,9 @@ export class InMemoryConsumersRepository implements ConsumersRepository {
 }
 
 export class InMemoryOpportunitiesRepository implements OpportunitiesRepository {
-  /** key = `${accountId}|${idempotencyKey}` — emula el UNIQUE compuesto del DataStore. */
+  /** key = `${accountId}|${idempotencyKey}`. El DataStore real solo tiene UNIQUE(idempotency_key)
+   *  single-column (la UI de Catalyst no permite compuesto); este fake compone con account_id, así
+   *  que es MÁS estricto que producción. */
   private readonly byKey = new Map<string, OpportunityRecord>();
 
   private key(accountId: string, idempotencyKey: string): string {

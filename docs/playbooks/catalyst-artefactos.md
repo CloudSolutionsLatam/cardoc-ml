@@ -85,9 +85,9 @@ Las columnas de negocio van en **snake_case** en DataStore y se mapean a camelCa
 
 ### Constraint UNIQUE — se crea en la consola, no en código
 
-La idempotencia se apoya en `UNIQUE(account_id, idempotency_key)` sobre `crm_opportunities`. **Este constraint NO se declara en el repo**: se crea **en la consola de Catalyst** (así está documentado en el comentario de cabecera de `catalyst.ts`). El código asume que existe: `insertIfAbsent` intenta el insert y, si el UNIQUE rechaza el segundo concurrente, cae al `catch`, busca el existente y devuelve `created: false`. Esa es la red **física** anti-duplicación (estilo Stripe: mismo `NroSolicitud` + payload distinto → 409 `IDEMPOTENCY_CONFLICT`, lógica de fingerprint en el use-case).
+La idempotencia se apoya en `UNIQUE(idempotency_key)` (single-column) sobre `crm_opportunities`. Catalyst no soporta UNIQUE compuesto por UI (solo single-column); el filtrado por `(account_id, idempotency_key)` que hace el código en el lookup es **lectura defensiva de tenancy**, no el constraint del índice. **Este constraint NO se declara en el repo**: se crea **en la consola de Catalyst** (así está documentado en el comentario de cabecera de `catalyst.ts`). El código asume que existe: `insertIfAbsent` intenta el insert y, si el UNIQUE rechaza el segundo concurrente, cae al `catch`, busca el existente y devuelve `created: false`. Esa es la red **física** anti-duplicación (estilo Stripe: mismo `NroSolicitud` + payload distinto → 409 `IDEMPOTENCY_CONFLICT`, lógica de fingerprint en el use-case).
 
-> Acción operativa: el constraint UNIQUE en `crm_opportunities` es un paso **manual de provisioning en consola** que debe quedar en el checklist de deploy de cada environment. Ver [`./datastore-esquema.md`](./datastore-esquema.md) y [`./deploy-y-rollback.md`](./deploy-y-rollback.md).
+> Acción operativa: el constraint `UNIQUE(idempotency_key)` en `crm_opportunities` es un paso **manual de provisioning en consola** que debe quedar en el checklist de deploy de cada environment. Ver [`./datastore-esquema.md`](./datastore-esquema.md) y [`./deploy-y-rollback.md`](./deploy-y-rollback.md).
 
 > **⚠️ verificar (docs oficiales/consola):** mecanismo de **backup/export** del DataStore, **retención** y residencia de datos (PII bajo UY/AR/Wyoming), y quotas de filas/queries del plan. Open questions de plataforma.
 
@@ -172,8 +172,9 @@ apps/catalyst/
 ├── .catalystrc                          # vínculo a proyecto/env real (gitignored)
 └── functions/api/
     ├── catalyst-config.json             # descriptor de la función api
-    ├── package.json                     # deps que Catalyst instala en deploy
+    ├── package.json                     # metadata (Catalyst NO instala estas deps; express/zod/@cardoc/* se inlinan, el SDK se shippea a mano)
     ├── src/…                            # fuente TS
+    ├── node_modules/                    # SDK real shippeado (zcatalyst-sdk-node + transitivas), lo materializa deploy:prep
     └── index.js                         # bundle CJS (lo genera esbuild; lo requiere Catalyst)
 ```
 
@@ -201,8 +202,9 @@ Flujo: copiar el `.example` a `.catalystrc` y completar con IDs reales, o dejar 
 | Fase | Qué pasa | Artefacto que toca |
 |---|---|---|
 | **init** | `catalyst init` vincula el clon local a un proyecto/env y escribe `.catalystrc` | `.catalystrc` |
-| **build** (pre-deploy, propio del repo) | `pnpm exec tsc -b` + `scripts/bundle-function.mjs` (esbuild → `index.js`, format `cjs`, target `node24`, external `zcatalyst-sdk-node` (express inlineado)) | `index.js`, `catalyst-config.json` (`main`) |
-| **deploy** | `catalyst deploy` lee `catalyst.json` (target `api`), sube el `index.js` bundleado (autocontenido; el runtime de Catalyst provee `zcatalyst-sdk-node`) | `catalyst.json`, `package.json`, `catalyst-config.json` |
+| **build** (pre-deploy, propio del repo) | `pnpm exec tsc -b` + `scripts/bundle-function.mjs` (esbuild → `index.js`, format `cjs`, target `node24`; express/zod/`@cardoc/*` se **inlinan**, `zcatalyst-sdk-node` se **externaliza**) | `index.js`, `catalyst-config.json` (`main`) |
+| **deploy:prep** (pre-deploy, propio del repo) | `scripts/deploy-prep-sdk.mjs` materializa `zcatalyst-sdk-node` + sus transitivas como `node_modules` **real** en el function dir (el runtime de Catalyst NO provee el SDK) | `node_modules/` |
+| **deploy** | `catalyst deploy` lee `catalyst.json` (target `api`), sube el `index.js` bundleado + el `node_modules` shippeado con el SDK | `catalyst.json`, `catalyst-config.json`, `index.js`, `node_modules/` |
 
 El detalle por qué se bundlea (resolver `workspace:*` que npm no entiende en deploy) está en [`./monorepo-build-y-bundling.md`](./monorepo-build-y-bundling.md). El procedimiento operativo de deploy y rollback en [`./deploy-y-rollback.md`](./deploy-y-rollback.md).
 

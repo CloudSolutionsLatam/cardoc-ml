@@ -1,7 +1,7 @@
 ---
 title: Playbook — Deploy y Rollback (cardoc-ml)
 status: scaffolding
-last_reviewed: 2026-06-25
+last_reviewed: 2026-06-30
 ---
 
 # Deploy y Rollback
@@ -36,21 +36,27 @@ E-01 (scaffold) está completo y es **deployable**. El adapter **CRM (`ZohoCrmCl
 Cronograma del sprint: 22/06 → 03/07/2026. Owner: Nestor Toñanez. Equipo: 1 dev.
 
 **Ya desplegado:** la función `api` está viva en el proyecto **ML** (env Development),
-`https://ml-909785950.development.catalystserverless.com/server/api/`, modo `memory+mock`,
-**smoke remoto 12/12 verde**. Re-deploy con **E-02** (`ZohoCrmClient` real) el 2026-06-30 —
-smoke 12/12 verde (incl. `stage "Nueva Solicitud"`). El **modo CRM real** requiere setear en la
-consola los env vars del self-client + `CARDOC_CRM_MODE=zoho` (ver §6, matriz de variables).
+`https://ml-909785950.development.catalystserverless.com/server/api/`. Hitos verificados:
+- `memory+mock` — smoke remoto 12/12 verde (2026-06-25).
+- **E-02 `ZohoCrmClient` real** en modo `datastore+zoho` — **alta real end-to-end 5/5 verde (2026-06-30)**
+  vía `scripts/smoke-catalyst-crm.mjs`: Capa 2 (created + `duplicate` por `EXTERNAL_ID`), Capa 1
+  (created + `409` por payload distinto), `stage "Nueva Solicitud"`. Requiere en la consola los env
+  vars del self-client (`ZOHO_CLIENT_ID/SECRET/REFRESH_TOKEN`) + `CARDOC_CRM_MODE=zoho` +
+  `CARDOC_PERSISTENCE=datastore`, y el **seed de `api_tokens`** (§6).
 
 ---
 
-## Gotchas de plataforma (verificados en el smoke del 2026-06-25 — NO volver a caer)
+## Gotchas de plataforma (verificados a los golpes en los deploys 2026-06-25 y 2026-06-30 — NO volver a caer)
 
-Cuatro cosas que rompieron el primer deploy y su solución definitiva. **Leer antes de cada deploy nuevo:**
+Lo que rompió los primeros deploys y su solución definitiva. **Leer antes de cada deploy nuevo:**
 
 1. **El CLI de Catalyst necesita la CA del sistema.** Toda invocación a `catalyst` (no solo `pnpm`) rompe en TLS en la red de Unicorp (`unable to verify the first certificate`) → prefijar **`NODE_OPTIONS=--use-system-ca`**.
-2. **Catalyst NO instala las `dependencies` del `package.json`.** Externalizar `express` daba `Cannot find module 'express'` en runtime. → el bundle **inlina express**; el único external es **`zcatalyst-sdk-node`** (lo provee el runtime) + require lazy. Ver §3 y [ADR-0010](../decisions/README.md#adr-0010).
-3. **Catalyst reserva el header `Authorization`** (lo valida como OAuth Zoho → `INVALID_TOKEN`, antes de llegar a la función). → la auth del consumidor va en **`X-Api-Key`**, nunca `Authorization`. Ver [ADR-0014](../decisions/README.md#adr-0014).
-4. **La función debe ser pública** para que gobierne NUESTRA auth: Security Rules `authentication: optional` (si queda `required`, Catalyst gatea con su token). Ver §4.5.
+2. **El SDK `zcatalyst-sdk-node` NO se puede bundlear NI lo provee el runtime.** Hace `require()` dinámicos de sus submódulos (`./zcql/zcql`) que esbuild no resuelve (inlinarlo → `Cannot find module './zcql/zcql'`); y el runtime tampoco lo trae (externalizarlo sin más → `Cannot find module 'zcatalyst-sdk-node'`). → se **externaliza** y se **shippea como `node_modules` real** vía `scripts/deploy-prep-sdk.mjs` (paso `pnpm --filter @cardoc/fn-api predeploy`, §3/§5). El resto (`express`, `zod`, `@cardoc/*`) se **inlina** porque Catalyst **no instala** las `dependencies` del `package.json`. Ver [ADR-0010](../decisions/README.md#adr-0010).
+3. **Tras un `pnpm install`, pnpm restaura el symlink del SDK** (que se rompe al zipear) → hay que **re-correr `predeploy`** antes de deployar, o vuelve el `Cannot find module 'zcatalyst-sdk-node'`.
+4. **Catalyst reserva el header `Authorization`** (lo valida como OAuth Zoho → `INVALID_TOKEN`, antes de llegar a la función). → la auth del consumidor va en **`X-Api-Key`**, nunca `Authorization`. Ver [ADR-0014](../decisions/README.md#adr-0014).
+5. **La función debe ser pública** para que gobierne NUESTRA auth: Security Rules `authentication: optional` (si queda `required`, Catalyst gatea con su token). Ver §4.5.
+6. **El DataStore se crea VACÍO: sin la fila de `api_tokens`, toda request da `401 "token inválido"`.** Las tablas se crean por consola (DDL console-only) pero quedan sin filas; hay que **sembrar `api_tokens` por "Add Row"** (NO por CSV — el campo `scopes` JSON rompe el importador). Ver §6 y [datastore-esquema](./datastore-esquema.md).
+7. **La auth a Zoho CRM es self-client, NO la Catalyst Connection de consola** (tenía un bug de refresh token). Las credenciales (`ZOHO_CLIENT_ID/SECRET/REFRESH_TOKEN`) van en Environment Variables; el SDK renueva el token en runtime. Ver [ADR-0004](../decisions/README.md#adr-0004) y §6.
 
 ---
 
@@ -102,19 +108,22 @@ pnpm -r run test
 pnpm run lint
 ```
 
-Estado verificado en verde: `tsc -b`, 7 tests (vitest), eslint, bundle esbuild. El secret-scan se valida en CI (requiere Docker + historia completa).
+Estado verificado en verde: `tsc -b`, **25 tests** (vitest), eslint, bundle esbuild. El secret-scan se valida en CI (requiere Docker + historia completa).
 
 ---
 
 ## 3. Build del bundle desplegable
 
-Catalyst despliega un único `index.js` CommonJS por función. El bundling resuelve la fricción monorepo↔Catalyst: `express`, `zod` y los `@cardoc/*` (`workspace:*`) se **inlinan** en el bundle; el único external es `zcatalyst-sdk-node`, que **provee el runtime de Catalyst**. Catalyst **no** instala las deps del `package.json` (el smoke 2026-06-25 lo confirmó: externalizar `express` daba `Cannot find module 'express'`).
+Catalyst despliega un único `index.js` CommonJS por función, **más un `node_modules` real con el SDK**. El bundling resuelve la fricción monorepo↔Catalyst: `express`, `zod` y los `@cardoc/*` (`workspace:*`) se **inlinan** en el bundle (Catalyst **no** instala las deps del `package.json` — externalizar `express` daba `Cannot find module 'express'`). El único external es `zcatalyst-sdk-node`, que **no se puede inlinar** (hace `require()` dinámicos de submódulos → `Cannot find module './zcql/zcql'`) **ni lo provee el runtime**: se externaliza y se **materializa como `node_modules` real** en el function dir (los symlinks de pnpm se rompen al zipear). Ver [ADR-0010](../decisions/README.md#adr-0010).
 
 ```bash
-pnpm --filter @cardoc/fn-api run build
+# Build + materialización del SDK real, en un solo paso (correr SIEMPRE antes de deploy):
+pnpm --filter @cardoc/fn-api predeploy
 ```
 
-Ese script (en `apps/catalyst/functions/api/package.json`) ejecuta:
+`predeploy` = `build` (`tsc -b` + esbuild → `index.js`) **+** `deploy:prep` (materializa `zcatalyst-sdk-node` + transitivas como `node_modules` real vía [`scripts/deploy-prep-sdk.mjs`](../../scripts/deploy-prep-sdk.mjs)). El `build` solo alcanza para dev local en modo mock, pero **un deploy sin `deploy:prep` falla en runtime** con `Cannot find module 'zcatalyst-sdk-node'`.
+
+El `build` (en `apps/catalyst/functions/api/package.json`) ejecuta:
 
 ```
 tsc -b && node ../../../../scripts/bundle-function.mjs api
@@ -127,10 +136,10 @@ Parámetros del bundle (en [`scripts/bundle-function.mjs`](../../scripts/bundle-
 | `entryPoints` | `src/index.ts` | `src/index.ts` hace `export = app` (CommonJS) |
 | `format` | `cjs` | Catalyst Advanced I/O carga CommonJS |
 | `platform` / `target` | `node` / `node24` | stack de la función |
-| `external` | `['zcatalyst-sdk-node']` | lo provee el runtime de Catalyst; express y el resto se inlinean |
+| `external` | `EXTERNALS` (= `['zcatalyst-sdk-node']`, en `scripts/function-externals.mjs`) | el SDK no se puede inlinar (require dinámicos) ni lo provee el runtime → se shippea como `node_modules` real; express y el resto se inlinean |
 | `sourcemap` | `true` | genera `index.js.map` |
 
-Salida: `apps/catalyst/functions/api/index.js` (~1.3 MB). **`index.js` e `index.js.map` están gitignored** (`.gitignore`: `apps/catalyst/functions/*/index.js`). Son artefacto de build, no se versionan — se regeneran en cada deploy.
+Salida: `apps/catalyst/functions/api/index.js` (~1.3 MB) **+** `apps/catalyst/functions/api/node_modules/zcatalyst-sdk-node` (+ transitivas, materializadas por `deploy:prep`). **`index.js`, `index.js.map` y `node_modules` están gitignored.** Son artefacto de build, no se versionan — se regeneran en cada `predeploy`.
 
 > Nota: `package.json` raíz declara `pnpm.onlyBuiltDependencies:['esbuild']` para que esbuild pueda compilar su binario nativo en install. Si el install se hizo con esa allowlist ausente, esbuild no estará listo y el bundle fallará.
 
@@ -179,8 +188,8 @@ Orden estricto: **build → deploy**. Nunca `catalyst deploy` sin un `index.js` 
 
 ```bash
 # 1. Asegurar binding apuntando al entorno dev (ver §4)
-# 2. Regenerar el bundle desde cero
-pnpm --filter @cardoc/fn-api run build
+# 2. Regenerar el bundle + materializar el SDK real (build + deploy:prep) — NO saltear el prep
+pnpm --filter @cardoc/fn-api predeploy
 # 3. Desplegar (verificado): solo la función api, sin lifecycle scripts, con CA del sistema
 cd apps/catalyst
 NODE_OPTIONS=--use-system-ca catalyst deploy --only functions:api --ignore-scripts
@@ -196,7 +205,7 @@ Las variables de entorno **no van en el repo ni en el bundle**: se cargan en la 
 
 ## 6. Variables de entorno (se cargan en la consola, NO en el repo)
 
-Plantilla en [`.env.example`](../../.env.example). El `.env` local está gitignored. **En Catalyst, estas variables se setean en Console → Environment Variables del entorno correspondiente**, separadas entre dev y prod. El access token real de Zoho lo resuelve la **Catalyst Connection** en runtime (OAuth gestionado), no una variable de entorno con el secreto.
+Plantilla en [`.env.example`](../../.env.example). El `.env` local está gitignored. **En Catalyst, estas variables se setean en Console → Environment Variables del entorno correspondiente**, separadas entre dev y prod. El access token real de Zoho lo resuelve el **self-client OAuth** (el SDK renueva con `ZOHO_CLIENT_ID/SECRET/REFRESH_TOKEN`) en runtime, no una variable de entorno con el token pegado.
 
 | Variable | Valores | Default `.env.example` | Notas |
 |----------|---------|------------------------|-------|
@@ -207,8 +216,11 @@ Plantilla en [`.env.example`](../../.env.example). El `.env` local está gitigno
 | `CARDOC_CAP_DEFAULT_DAY` | entero | `10000` | |
 | `CARDOC_CAP_DEFAULT_WEEK` | entero | `50000` | |
 | `ZOHO_CRM_API_DOMAIN` | URL | `https://www.zohoapis.com` | dominio de API |
-| `ZOHO_CRM_CONNECTOR_NAME` | string | `zoho_crm_conn` | nombre de la Connection |
-| `ZOHO_CRM_ACCESS_TOKEN` | placeholder dev | — | placeholder de dev; en prod lo resuelve la Connection |
+| `ZOHO_CRM_CONNECTOR_NAME` | string | `zoho_crm_conn` | nombre del conector self-client |
+| `ZOHO_CLIENT_ID` | secreto | — | **self-client OAuth**; el SDK renueva el access token con esto |
+| `ZOHO_CLIENT_SECRET` | secreto | — | self-client OAuth |
+| `ZOHO_REFRESH_TOKEN` | secreto | — | self-client OAuth (refresh token de larga vida) |
+| `ZOHO_CRM_ACCESS_TOKEN` | override | — | opcional: token directo (testing/token corto); si está, se saltea el self-client |
 
 ### Matriz de modos por entorno
 
@@ -219,7 +231,7 @@ Plantilla en [`.env.example`](../../.env.example). El `.env` local está gitigno
 | **dev (E-03)** | `datastore` | `zoho` | `creator` | cuando `ZohoCreatorReportsSource` deje de ser stub |
 | **prod** | `datastore` | `zoho` | `creator` | producción real |
 
-> Token de dev sembrado en memoria (solo con persistencia `memory`): `X-Api-Key: test-token` — todos los scopes, Cuenta `acc_dev`. **No existe en prod.** No usarlo para validar prod.
+> Token de dev sembrado en memoria (solo con persistencia `memory`): `X-Api-Key: test-token` — todos los scopes, Cuenta `acc_dev`. **En modo `datastore` ese token NO se siembra solo:** hay que cargar la fila en `api_tokens` por "Add Row" (`token_hash` = sha256(`test-token`), Cuenta ML, scopes) — sin ella, toda request da `401 "token inválido"`. Ver [datastore-esquema](./datastore-esquema.md) y `scripts/datastore-bootstrap/`. **No usar `test-token` en prod.**
 
 Setup de la Connection OAuth a CRM y residencia de la PII (UY/AR/Wyoming): ver [`./secretos-y-connections.md`](./secretos-y-connections.md) y open questions de plataforma (§9).
 
@@ -229,10 +241,12 @@ Setup de la Connection OAuth a CRM y residencia de la PII (UY/AR/Wyoming): ver [
 
 Smoke = una verificación de humo, no una suite. Un request por endpoint contra el entorno recién desplegado. **Se corre en dev tras el deploy a dev, y se repite en prod tras el deploy a prod.** Si cualquiera falla → no se promueve a prod / se dispara rollback.
 
-> Smoke versionado en el repo: **`pnpm smoke`** (local, in-process — 19 checks) y
-> **`NODE_OPTIONS=--use-system-ca pnpm smoke:catalyst`** (contra la URL desplegada — 12 checks;
-> override `BASE=<url>`). Verificados en verde el 2026-06-25 (19/19 y 12/12). Las secciones
-> 7.1–7.3 documentan qué cubre cada check, por si querés correrlos a mano con `curl`.
+> Smoke versionado en el repo:
+> - **`pnpm smoke`** (local, in-process — **21 checks**; 21/21 verde 2026-06-30).
+> - **`NODE_OPTIONS=--use-system-ca pnpm smoke:catalyst`** (contra la URL desplegada, modos mock/seed — 12 checks; override `BASE=<url>`).
+> - **`NODE_OPTIONS=--use-system-ca NRO=<n> node scripts/smoke-catalyst-crm.mjs`** (alta **CRM real** sobre la función desplegada en `datastore+zoho` — **5/5 verde 2026-06-30**: crea Contact+Deal reales en la Cuenta ML; usar `NroSolicitud` frescos cada corrida).
+>
+> Las secciones 7.1–7.3 documentan qué cubre cada check, por si querés correrlos a mano con `curl`.
 
 Base URL (dev, verificado): `https://ml-909785950.development.catalystserverless.com/server/api`. Formato: `https://<project>-<org>.<env>.catalystserverless.com/server/<fn>`. El smoke se corre con `node fetch` + `NODE_OPTIONS=--use-system-ca` (curl choca con la CA corporativa).
 
@@ -306,11 +320,11 @@ Solo se promueve con **CI en verde + smoke de dev en verde**. Secuencia:
 ```bash
 # 1. Confirmar smoke de dev OK (§7)
 # 2. Apuntar el binding al entorno prod (ver §4 — «⚠️ verificar» el mecanismo de cambio de entorno)
-# 3. Confirmar Environment Variables de prod cargadas en consola (§6) — NO heredan de dev
-# 4. Regenerar bundle limpio
-pnpm --filter @cardoc/fn-api run build
+# 3. Confirmar Environment Variables de prod + seed de api_tokens en el DataStore de prod (§6) — NO heredan de dev
+# 4. Regenerar bundle + materializar SDK
+pnpm --filter @cardoc/fn-api predeploy
 # 5. Desplegar a prod
-catalyst deploy
+cd apps/catalyst && NODE_OPTIONS=--use-system-ca catalyst deploy --only functions:api --ignore-scripts
 # 6. Smoke en prod (§7) — repetir health + 3 endpoints contra BASE_URL de prod
 ```
 
@@ -341,8 +355,8 @@ Si aplica freeze (cierre de sprint, evento de negocio, ventana de bajo riesgo): 
      ```bash
      git checkout <tag-o-commit-bueno>
      NODE_OPTIONS=--use-system-ca pnpm install   # local
-     pnpm --filter @cardoc/fn-api run build
-     catalyst deploy
+     pnpm --filter @cardoc/fn-api predeploy       # build + SDK real
+     cd apps/catalyst && NODE_OPTIONS=--use-system-ca catalyst deploy --only functions:api --ignore-scripts
      ```
      Esto reconstruye el bundle desde el código previo y lo publica. Reproducible siempre que el commit esté tageado/identificado.
 3. **Smoke post-rollback** (§7) contra prod: health + 3 endpoints. Confirmar que el código vuelve a verde.
@@ -353,6 +367,24 @@ Si aplica freeze (cierre de sprint, evento de negocio, ventana de bajo riesgo): 
 ### Datos y migraciones — advertencia
 
 El rollback de **código** no revierte datos. El DataStore (tablas `crm_opportunities`, `audit_log`, etc. — ver [`./datastore-esquema.md`](./datastore-esquema.md)) y los efectos en Zoho CRM (Contacts/Deals creados) **no se deshacen** con un rollback de bundle. `audit_log` es append-only por diseño. Si el release introdujo cambios de esquema o escribió datos incompatibles, el rollback de código no alcanza: escalar y tratar como incidente de datos. Mecanismo de backup/export del DataStore: open question de plataforma (§10).
+
+---
+
+## 9.5 Troubleshooting — síntoma → causa → fix (lo que ya sufrimos)
+
+Errores reales que aparecieron en los deploys y su diagnóstico verificado. **Antes de debuggear a ciegas, buscá el síntoma acá.**
+
+| Síntoma (respuesta / log) | Causa raíz | Fix |
+|---|---|---|
+| `500 INTERNAL_ERROR` — `Cannot find module 'zcatalyst-sdk-node'` | El SDK se externalizó pero no se shippeó (o un `pnpm install` restauró el symlink de pnpm, que se rompe al zipear). | Correr `pnpm --filter @cardoc/fn-api predeploy` (materializa el SDK real) y re-deployar. |
+| `500 INTERNAL_ERROR` — `Cannot find module './zcql/zcql'` | Se intentó **inlinar** el SDK (`external: []`); esbuild no resuelve sus `require()` dinámicos. | Mantener el SDK en `EXTERNALS` (`scripts/function-externals.mjs`) + shippearlo real. Nunca inlinarlo. |
+| `500 INTERNAL_ERROR` — `Cannot find module 'express'` | Se externalizó `express` asumiendo que el runtime lo trae. Catalyst NO instala las deps del `package.json`. | `express` (y `zod`, `@cardoc/*`) van **inlinados** en el bundle. Solo el SDK es external. |
+| `401 UNAUTHENTICATED` "token inválido" en TODO (con token correcto) | La tabla `api_tokens` está vacía (las tablas se crean sin filas) o el `token_hash` no matchea. | Sembrar `api_tokens` por "Add Row" con `token_hash` = sha256 del token (§6). |
+| `500 INTERNAL_ERROR` genérico ("error interno") sin más detalle | Throw no controlado; `errorMiddleware` no expone el detalle en la respuesta (por diseño, no filtra interno/PII). | Revisar logs de Catalyst; o, en dev, surfacear temporalmente `err.message` en `middleware/errors.ts` para diagnosticar y **revertir**. |
+| `INVALID_TOKEN` **antes** de llegar a Express (no es nuestro sobre de error) | Token mandado en `Authorization` (Catalyst lo reserva) o la función quedó con Security Rules `authentication: required`. | Token en `X-Api-Key`; Security Rules `authentication: optional` (§4.5, [ADR-0014](../decisions/README.md#adr-0014)). |
+| `502 UPSTREAM_ERROR` — `INVALID_DATA {"api_name":"Cedula","expected_data_type":"text"}` | El campo `Cedula` en Zoho es de tipo **texto**; se envió como número. | El adapter envía `String(nroCedula)` (ya en `crm-client.ts`); si reaparece en otro campo, castear a `String`. |
+| `unable to verify the first certificate` (TLS) en `pnpm`/`catalyst` | Red corporativa Unicorp con CA propia (intercepción TLS). | Prefijar `NODE_OPTIONS=--use-system-ca` en TODA invocación de `pnpm`/`catalyst`/`node`. |
+| Container init falla: "CARDOC_CRM_MODE=zoho en modo memory requiere ZOHO_CRM_ACCESS_TOKEN" | `CARDOC_CRM_MODE=zoho` sin `CARDOC_PERSISTENCE=datastore` y sin token directo: no hay app Catalyst para el self-client. | En Catalyst usar `datastore+zoho` (el self-client resuelve el token); para `memory+zoho` (local), setear `ZOHO_CRM_ACCESS_TOKEN`. |
 
 ---
 
@@ -385,18 +417,19 @@ catalyst init                                   # genera .catalystrc (gitignored
 # Cada release a dev:
 NODE_OPTIONS=--use-system-ca pnpm install        # red corporativa (local)
 pnpm -r run typecheck && pnpm -r run test && pnpm run lint
-pnpm --filter @cardoc/fn-api run build           # tsc -b + esbuild → index.js
-catalyst deploy                                  # entorno dev
-# → smoke (§7): health + 3 endpoints
+pnpm --filter @cardoc/fn-api predeploy           # build (tsc+esbuild) + deploy:prep (SDK real) ⚠️ NO saltear
+cd apps/catalyst && NODE_OPTIONS=--use-system-ca catalyst deploy --only functions:api --ignore-scripts
+# → smoke (§7): health + 3 endpoints (+ smoke-catalyst-crm.mjs si es datastore+zoho)
 
 # Promoción a prod (smoke de dev en verde):
-# (apuntar binding a prod + cargar Env Vars de prod en consola)
-pnpm --filter @cardoc/fn-api run build
-catalyst deploy                                  # entorno prod
+# (apuntar binding a prod + cargar Env Vars de prod en consola + seed api_tokens en el DataStore de prod)
+pnpm --filter @cardoc/fn-api predeploy
+cd apps/catalyst && NODE_OPTIONS=--use-system-ca catalyst deploy --only functions:api --ignore-scripts
 # → smoke (§7) en prod
 
 # Rollback (re-deploy del tag bueno):
-git checkout <tag-bueno> && pnpm --filter @cardoc/fn-api run build && catalyst deploy
+git checkout <tag-bueno> && pnpm --filter @cardoc/fn-api predeploy && \
+  (cd apps/catalyst && NODE_OPTIONS=--use-system-ca catalyst deploy --only functions:api --ignore-scripts)
 # → smoke (§7)
 ```
 

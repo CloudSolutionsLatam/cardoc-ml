@@ -1,9 +1,10 @@
 /**
  * Idempotencia del POST /v1/opportunity-contact (AC-08).
  *
- * DECISIÓN (Nestor 2026-06-25): la clave de idempotencia es el HEADER
- * `X-Idempotency-Key` que manda el consumidor. La unicidad física es
- * `UNIQUE(account_id, idempotency_key)` en el DataStore.
+ * DECISIÓN (Nestor 2026-06-25): la clave de idempotencia (Capa 1) es el HEADER
+ * `X-Idempotency-Key` que manda el consumidor (NO el `NroSolicitud`). La unicidad física es
+ * `UNIQUE(idempotency_key)` single-column en el DataStore (la UI de Catalyst no permite UNIQUE
+ * compuesto; `account_id` se filtra en la query como defensa de tenancy).
  *
  * `payloadFingerprint` se persiste junto a la clave para detectar el caso
  * "misma clave, payload distinto" → 409 IDEMPOTENCY_CONFLICT (semántica Stripe).

@@ -29,10 +29,11 @@ estado). Detalle: [`../ARQUITECTURA.md`](../ARQUITECTURA.md) · integración:
 [`playbooks/integracion-mlcenter.md`](playbooks/integracion-mlcenter.md).
 
 > **Estado (2026-06-25): E-01 completo y deployable.** Verde verificado: `tsc -b`,
-> 7 tests, `eslint`, smoke e2e 16/16, bundle esbuild. La lógica de E-02/E-03 (use-cases
-> + puertos) está construida; `ZohoCrmClient` (CRM) **implementado** (E-02), mientras
-> `ZohoCreatorReportsSource` y el **DataStore productivo** siguen stubs. Sprint 22/06→03/07/2026,
-> owner Nestor Toñanez, 1 dev.
+> `eslint`, bundle esbuild, suite local 25 tests + smoke local 21/21. Alta real validada
+> en Catalyst (DataStore + Zoho) vía `scripts/smoke-catalyst-crm.mjs` → 5/5. La lógica de
+> E-02/E-03 (use-cases + puertos) está construida; `ZohoCrmClient` (CRM) **implementado**
+> (E-02) y el **DataStore productivo** operativo, mientras `ZohoCreatorReportsSource` (E-03)
+> sigue stub. Sprint 22/06→03/07/2026, owner Nestor Toñanez, 1 dev.
 
 ## El modelo mental
 
@@ -57,10 +58,12 @@ Todo lo demás es config de plataforma (`apps/catalyst/catalyst.json`, `catalyst
   con un token, mapeado a una **Cuenta de Zoho CRM** (módulo Accounts). El `accountId`
   se resuelve **siempre del token**, nunca del payload/query. Es el ancla de la tenancy.
 - **scope**: `opportunities:create` / `reports:read` / `reports:pdf`. Uno por endpoint.
-- **clave de idempotencia vs `payloadFingerprint`**: la clave es el `NroSolicitud`
-  del body (UNIQUE por Cuenta, `idempotency_key = String(NroSolicitud)`); el `payloadFingerprint` (hash
-  del payload) detecta "mismo NroSolicitud, payload distinto" → `409`. Ver
-  [`../ARQUITECTURA.md`](../ARQUITECTURA.md) §idempotencia.
+- **clave de idempotencia vs `payloadFingerprint`**: la clave de la **Capa 1** es el header
+  `X-Idempotency-Key` que manda el consumidor (NO el `NroSolicitud`), con `UNIQUE(idempotency_key)`
+  single-column; el filtrado por `account_id` en el código es lectura defensiva de tenancy, no el
+  constraint del índice. El `payloadFingerprint` (hash del payload) detecta "misma clave, payload
+  distinto" → `409`. (La **Capa 2**, siempre activa, dedup por `NroSolicitud` = `EXTERNAL_ID` en el CRM.)
+  Ver [`../ARQUITECTURA.md`](../ARQUITECTURA.md) §idempotencia.
 - **puerto vs adapter**: el puerto es la interface (en `providers`/`persistence`); el
   adapter es la implementación (Mock para dev, Zoho/DataStore para prod).
 - **upstream**: Zoho CRM / Creator / WorkDrive. Sus fallas → `502 UPSTREAM_ERROR` con
@@ -111,7 +114,7 @@ Hoy `ZohoCreatorReportsSource` (Creator/WorkDrive, E-03) lanza `NotImplementedEr
 `ZohoCrmClient` ya está implementado (E-02). Para implementar el que falta:
 
 1. [`playbooks/secretos-y-connections.md`](playbooks/secretos-y-connections.md) — cómo se
-   resuelve el `accessToken` de la Catalyst Connection (CRM) y dónde viven los secretos.
+   resuelve el `accessToken` por self-client OAuth (SDK) y dónde viven los secretos.
 2. `packages/providers/src/crm-client.ts` / `reports-source.ts` — implementá los métodos
    del puerto. **El `fetch`/HTTP externo solo puede vivir acá** (lo exige el lint).
 3. `apps/catalyst/functions/api/src/container.ts` — activá el adapter real con el flag
@@ -150,7 +153,8 @@ Abrí en orden:
 
 Outcomes: `201 created` · `200 duplicate` (mismo NroSolicitud, mismo payload) · `409
 IDEMPOTENCY_CONFLICT` (mismo NroSolicitud, payload distinto) · `202 in_progress`. La unicidad
-física es `UNIQUE(account_id, idempotency_key)` — **se crea a mano en la consola**, ver
+física es `UNIQUE(idempotency_key)` single-column (Catalyst no soporta UNIQUE compuesto por UI) —
+**se crea a mano en la consola**, ver
 [`playbooks/datastore-esquema.md`](playbooks/datastore-esquema.md).
 
 ### "El flujo del PDF (GET /informes/:id/pdf)"
@@ -168,21 +172,30 @@ PDF en Catalyst** → write-back a `Analisis.pdf_url` → stream. Hoy el handler
 2. `packages/persistence/src/entities.ts` (tipos de fila) y `catalyst.ts` (mapeo
    snake_case ↔ camelCase + ZCQL). `memory.ts` para los fakes.
 
-Cuidado: el `UNIQUE(account_id, idempotency_key)` no está declarado en el repo — se crea
-en la consola. Si falta, la idempotencia falla **en silencio**.
+Cuidado: el `UNIQUE(idempotency_key)` (single-column; Catalyst no crea tablas/columnas/índices
+por SDK, el DDL es **solo consola**) no está declarado en el repo — se crea a mano. Si falta,
+la idempotencia falla **en silencio**.
 
 ### "Deploy / rollback"
 
-[`playbooks/deploy-y-rollback.md`](playbooks/deploy-y-rollback.md). Resumen:
-`pnpm install` (con `--use-system-ca`) → `pnpm -r run typecheck/test` → `pnpm run lint`
-→ `pnpm --filter @cardoc/fn-api run build` → `catalyst init` (1ª vez) → `catalyst deploy`.
+[`playbooks/deploy-y-rollback.md`](playbooks/deploy-y-rollback.md). Resumen de la secuencia
+verificada: **(1)** `pnpm --filter @cardoc/fn-api predeploy` (= build [tsc + esbuild bundle]
++ `deploy:prep`, que materializa `zcatalyst-sdk-node` como `node_modules` **real** en el
+function dir). **(2)** `cd apps/catalyst` && `catalyst deploy --only functions:api
+--ignore-scripts` con `NODE_OPTIONS=--use-system-ca` (CA corporativa).
+Gotcha: tras cualquier `pnpm install`, pnpm restaura el symlink del SDK → re-correr
+`predeploy` (o `deploy:prep`) antes de deployar, o el runtime falla con "Cannot find module".
 Secretos se cargan en la consola, nunca en el repo.
 
 ### "No compila / build / bundling"
 
 [`playbooks/monorepo-build-y-bundling.md`](playbooks/monorepo-build-y-bundling.md):
-pnpm workspaces, `tsc -b` (project references), esbuild bundle (externals
-`express` + `zcatalyst-sdk-node`). Gotcha de install en red corporativa:
+pnpm workspaces, `tsc -b` (project references), esbuild bundle a un único `index.js`
+CommonJS. `express`, `zod` y los `@cardoc/*` se **inlinan**; el **único external** es
+`zcatalyst-sdk-node` (hace `require()` dinámicos que esbuild no resuelve, y el runtime de
+Catalyst no lo provee), que se **shippea** como `node_modules` real vía `deploy:prep`. La
+lista de externals es única en `scripts/function-externals.mjs` (la consumen `bundle-function.mjs`
+y `deploy-prep-sdk.mjs`). Gotcha de install en red corporativa:
 `NODE_OPTIONS=--use-system-ca pnpm install`.
 
 ### "Cómo funciona X de Catalyst"
@@ -241,13 +254,15 @@ fronteras hexagonales). Una ADR aceptada no se cambia sin una nueva que la super
 cardoc-ml/
 ├── packages/
 │   ├── domain/        @cardoc/domain      tipos · schemas Zod · idempotency · tokens (Node puro)
-│   ├── providers/     @cardoc/providers   puertos CrmClient/ReportsSource + adapters (Mock + Zoho stub)
+│   ├── providers/     @cardoc/providers   puertos CrmClient/ReportsSource + adapters (Mock + Zoho: CRM impl, Reports stub)
 │   ├── persistence/   @cardoc/persistence entities · repos (puertos) · catalyst (DataStore) · memory (fakes)
 │   └── application/   @cardoc/application use-cases: createOpportunityContact · listInformes · streamReportPdf
 ├── apps/catalyst/
 │   ├── catalyst.json                      targets: ['api']
 │   └── functions/api/  @cardoc/fn-api      Advanced I/O: index.ts(export=app) · app.ts · container.ts · middleware/* · routes/*
-├── scripts/bundle-function.mjs            esbuild → index.js (external zcatalyst-sdk-node (express inlineado))
+├── scripts/function-externals.mjs         fuente ÚNICA de externals (solo zcatalyst-sdk-node)
+├── scripts/bundle-function.mjs            esbuild → index.js CommonJS (express/zod/@cardoc/* inlineados; sdk external)
+├── scripts/deploy-prep-sdk.mjs            materializa el external como node_modules real en el function dir
 ├── ARQUITECTURA.md · CONTRATOS.md · ATRIBUTOS-DE-CALIDAD.md · OPERACIONES.md · PLAN-DE-DESARROLLO.md
 └── docs/
     ├── ASSISTANT.md  (este archivo) · README.md (índice) · OPEN-QUESTIONS.md (registro único)
@@ -266,7 +281,7 @@ cardoc-ml/
 - **Smoke:** levantar el app Express compilado (`require` de `apps/catalyst/functions/api/dist/index.js`)
   y `fetch` a los endpoints. El `index.js` es CommonJS (`export = app`); por eso el mismo
   app corre en Catalyst y standalone (`dev-server.mjs` solo le agrega `.listen`).
-- **Build/deploy:** `pnpm --filter @cardoc/fn-api run build` (tsc -b + esbuild) → `catalyst deploy`.
+- **Build/deploy:** `pnpm --filter @cardoc/fn-api predeploy` (build [tsc -b + esbuild] + `deploy:prep`, que materializa el SDK real) → `catalyst deploy --only functions:api --ignore-scripts`.
 - **Install en red corporativa:** `NODE_OPTIONS=--use-system-ca pnpm install` (CA propia / TLS interceptado).
 - Toolchain confirmado: node 24.13, pnpm 10.29.2.
 
