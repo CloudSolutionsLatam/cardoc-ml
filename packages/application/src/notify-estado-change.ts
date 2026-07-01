@@ -9,17 +9,28 @@
 import type { MlCenterClient, MlEstado } from "@cardoc/providers";
 
 /**
- * Mapeo CRM `Deal.Stage` -> ML `Estado`. **PLACEHOLDER**: los valores exactos del picklist
- * `Stage` del CRM están pendientes de confirmar (ver docs/OPEN-QUESTIONS.md). Un Stage que
- * no mapea → no se notifica (skipped).
+ * Mapeo CRM `Deal.Stage` (pipeline **B2B**) -> ML `Estado`. Valores confirmados por Nestor
+ * (OQ-N6, 2026-07-01) contra `settings/pipeline`; detalle en `docs/reference/crm-data-model.md`.
+ * Flujo B2B: `Nueva Solicitud` → `Agendado B2B` → `Completado` → `Cerrado` | `Cancelado`.
+ *
+ * Solo dos stages notifican a ML; los otros tres NO mapean → `skipped` (no es error):
+ *  - `Nueva Solicitud`: estado inicial (ML ya lo conoce, fue quien lo creó) — no se notifica.
+ *  - `Cancelado`: terminal; ML no tiene un estado de cancelación en el contrato AutoCheck.
+ *
+ * ⚠️ Residual (OQ-N6.a): falta confirmar que el workflow del CRM dispare sobre `Deals.Stage`
+ * y no sobre `Informes_Revision.Estado` (que el field-tracker trackea). Si fuera lo segundo,
+ * las claves de este mapa cambian por los valores del picklist `Estado`.
  */
 export const STAGE_TO_ESTADO: Record<string, MlEstado> = {
-  // "<Stage de coordinación en CRM>": "COORDINACIÓN",
-  // "<Stage de finalizado en CRM>": "FINALIZADO",
+  "Agendado B2B": "COORDINACIÓN",
+  Completado: "FINALIZADO",
+  Cerrado: "FINALIZADO",
 };
 
+/** Resuelve el `Estado` de ML para un `Stage` del CRM, o `null` si el Stage no notifica.
+ *  Se hace `trim()` defensivo: el string llega por webhook y un espacio colado no debe romper el match. */
 export function mapStageToEstado(stage: string): MlEstado | null {
-  return STAGE_TO_ESTADO[stage] ?? null;
+  return STAGE_TO_ESTADO[stage.trim()] ?? null;
 }
 
 export interface NotifyEstadoInput {
@@ -35,6 +46,10 @@ export interface NotifyEstadoInput {
 export type NotifyEstadoOutcome =
   | { status: "sent"; estado: MlEstado }
   | { status: "skipped"; reason: string }
+  /** Falla de VALIDACIÓN del invariante de dominio (p.ej. FINALIZADO sin LinkResultado). ML
+   *  NO se llama; el transporte debe traducirlo a 4xx, no a 502 (no es culpa del upstream). */
+  | { status: "invalid"; message: string }
+  /** Falla REAL del cliente ML (el POST a AutoCheck falló). El transporte lo traduce a 502. */
   | { status: "error"; message: string };
 
 export async function notifyEstadoChange(
@@ -46,7 +61,8 @@ export async function notifyEstadoChange(
     return { status: "skipped", reason: `Stage '${input.stage}' no mapea a un Estado de ML` };
   }
   if (estado === "FINALIZADO" && !input.linkResultado) {
-    return { status: "error", message: "LinkResultado es obligatorio cuando el estado es FINALIZADO" };
+    // Validación de dominio, NO falla de ML: ML no se contacta. → 'invalid' (4xx), no 'error' (502).
+    return { status: "invalid", message: "LinkResultado es obligatorio cuando el estado es FINALIZADO" };
   }
   try {
     await deps.mlCenter.updateEstado({

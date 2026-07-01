@@ -33,7 +33,12 @@ export const dealEstadoHandler: RequestHandler = asyncHandler<AuthedRequest>(asy
       // El Stage no corresponde a un estado notificable a ML — no es error.
       res.status(200).json({ status: "skipped", reason: outcome.reason, correlationId });
       return;
+    case "invalid":
+      // Falla de validación del invariante (p.ej. FINALIZADO sin LinkResultado): ML nunca se
+      // llamó → 422, NO 502. Reintentar contra ML no arregla un payload incompleto.
+      throw new ApiError(422, "UNPROCESSABLE", outcome.message);
     case "error":
+      // Falla REAL del upstream ML.
       throw new ApiError(502, "UPSTREAM_ERROR", "no se pudo notificar el estado a ML", { upstream: "mlcenter" });
   }
 });

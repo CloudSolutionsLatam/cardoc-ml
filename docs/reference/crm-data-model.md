@@ -92,7 +92,8 @@ Las solicitudes AutoCheck van en el pipeline **`B2B`** (no el `Standard` default
 - ⚠️ `Nueva Solicitud` **no** existe en el pipeline `Standard`; mezclar pipeline/stage de
   pipelines distintos hace que Zoho rechace el create.
 
-**Candidato de mapeo `Stage` → ML `Estado`** (OQ-N6, outbound E-07 — **a confirmar con Nestor**):
+**Mapeo `Stage` → ML `Estado`** (OQ-N6, outbound E-07 — ✅ **confirmado por Nestor 2026-07-01**;
+implementado en `STAGE_TO_ESTADO`, `packages/application/src/notify-estado-change.ts`):
 
 | Stage B2B | ML `Estado` |
 |---|---|
@@ -100,6 +101,10 @@ Las solicitudes AutoCheck van en el pipeline **`B2B`** (no el `Standard` default
 | `Agendado B2B` | `COORDINACIÓN` |
 | `Completado` / `Cerrado` | `FINALIZADO` (requiere `LinkResultado`) |
 | `Cancelado` | — (terminal; ML no tiene estado de cancelación) |
+
+> ⚠️ Residual (OQ-N6.a): el mapeo asume que la fuente del estado es `Deals.Stage`. Falta
+> confirmar que el workflow del CRM dispara sobre `Deals.Stage` y no sobre
+> `Informes_Revision.Estado` (ver Hallazgo #4). Si fuera lo segundo, cambian las claves del mapa.
 
 ## Hallazgos estructurales (cambian el diseño del adapter)
 
@@ -115,9 +120,11 @@ Las solicitudes AutoCheck van en el pipeline **`B2B`** (no el `Standard` default
    → **Resuelto (CRM-Q4): NO se modela `Products`** — el adapter vuelca marca/modelo/año/
    matrícula (+ sucursal) como texto en `nota_agenda` del Deal.
 4. **Estados.** El field-tracker `Historial_de_Estado` trackea
-   `Informes_Revision.Estado`, **no** `Deals.Stage`. Define para [OQ-N6](../OPEN-QUESTIONS.md)
-   (outbound a ML) cuál es la fuente real del estado: el `Stage` del Deal o el `Estado`
-   del Informe. `Visitas` (custom) tampoco tiene lookup a Deals.
+   `Informes_Revision.Estado`, **no** `Deals.Stage`. El **mapeo** de valores ya está confirmado
+   e implementado (OQ-N6.b, ver §Pipeline B2B), pero queda **abierto** cuál es la fuente real
+   del disparo (OQ-N6.a): el `Stage` del Deal o el `Estado` del Informe. El diseño actual asume
+   `Deals.Stage` (consistente con el endpoint `deal-estado`). `Visitas` (custom) tampoco tiene
+   lookup a Deals.
 
 ## Pendiente de confirmar
 

@@ -142,7 +142,7 @@ lleno (link WorkDrive) stream; si vacío → generar el PDF en Catalyst → writ
 **Integración OUTBOUND a ML: CRM workflow → función Catalyst → `MlCenterClient`.** cardoc
 notifica a ML (MLCenter/AutoCheck) los cambios de estado de la solicitud vía
 `POST /api/autocheck/estado/actualizar`.
-- **Estado:** Aceptada (trigger confirmado por Nestor 2026-06-25). Mapeo de estados y credenciales pendientes ([OQ-N6/N7](../OPEN-QUESTIONS.md), [OQ-P9](../OPEN-QUESTIONS.md)).
+- **Estado:** Aceptada (trigger confirmado por Nestor 2026-06-25). Mapeo `Stage→Estado` ✅ confirmado e implementado (Nestor 2026-07-01, `STAGE_TO_ESTADO`); pendientes: origen del `LinkResultado` ([OQ-N7](../OPEN-QUESTIONS.md)), credenciales de ML ([OQ-P9](../OPEN-QUESTIONS.md)) y confirmar la fuente del disparo (Stage del Deal vs Estado del Informe, [OQ-N6](../OPEN-QUESTIONS.md)).
 - **Contexto:** el cambio de estado nace en CRM (`Deal.Stage`); hay que avisarle a ML con auth JWT (token 1h).
 - **Consecuencia:** un workflow del CRM dispara (webhook con shared-secret) la ruta interna `POST /v1/internal/deal-estado`; la función mapea `Stage→Estado` y llama a `MlCenterClient` (login JWT cacheado + POST). Lógica en código versionado, secretos en Catalyst. Ver `packages/providers/src/mlcenter-client.ts`, `packages/application/src/notify-estado-change.ts`, [`../playbooks/integracion-mlcenter.md`](../playbooks/integracion-mlcenter.md).
 - **Descartado:** Deluge en CRM (código en plataforma, secretos en CRM); cron/poll (no event-driven).

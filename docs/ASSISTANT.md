@@ -97,13 +97,14 @@ workflow (on `Deal.Stage` change) → `POST /v1/internal/deal-estado` (shared-se
 1. [`playbooks/integracion-mlcenter.md`](playbooks/integracion-mlcenter.md) — contrato del
    endpoint AutoCheck, flujo y mapeo. [ADR-0013](decisions/README.md#adr-0013).
 2. `packages/providers/src/mlcenter-client.ts` — adapter (login JWT cacheado + `updateEstado`).
-3. `packages/application/src/notify-estado-change.ts` — `STAGE_TO_ESTADO` (placeholder, ver
-   [OQ-N6](OPEN-QUESTIONS.md)) + regla `LinkResultado` para FINALIZADO.
+3. `packages/application/src/notify-estado-change.ts` — `STAGE_TO_ESTADO` (✅ mapeo B2B
+   confirmado e implementado, [OQ-N6](OPEN-QUESTIONS.md)) + regla `LinkResultado` para FINALIZADO.
 4. `apps/catalyst/functions/api/src/routes/internal.ts` + `requireInternalSecret` en
    `.../middleware/auth.ts`.
 
-Bloqueado para activar: mapeo Stage→Estado (OQ-N6), origen del LinkResultado (OQ-N7),
-credenciales (OQ-P9). El `NroSolicitud` de ML = External ID de la Oportunidad.
+Bloqueado para activar: origen del LinkResultado (OQ-N7), credenciales de ML (OQ-P9), y
+confirmar la fuente del disparo (Deals.Stage vs Informes_Revision.Estado, OQ-N6.a). El mapeo
+`Stage→Estado` ya está resuelto. El `NroSolicitud` de ML = External ID de la Oportunidad.
 
 Regla: el handler traduce HTTP ↔ dominio; la lógica vive en el use-case; el efecto
 externo, detrás de un puerto.

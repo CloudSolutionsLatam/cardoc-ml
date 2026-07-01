@@ -79,13 +79,23 @@ r = await fetch(`${base}/v1/informes/acc_otra-INF-999/pdf`, { headers: AUTH });
 j = await r.json().catch(() => ({}));
 check("GET pdf de informe ajeno → 404 NOT_FOUND (tenancy)", r.status === 404 && j?.error?.code === "NOT_FOUND", `got ${r.status}`);
 
-r = await fetch(`${base}/v1/internal/deal-estado`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ nroSolicitud: 908812, stage: "Coordinación" }) });
+r = await fetch(`${base}/v1/internal/deal-estado`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ nroSolicitud: 908812, stage: "Nueva Solicitud" }) });
 check("POST /v1/internal/deal-estado sin secret → 401", r.status === 401, `got ${r.status}`);
 
 const INT = { "Content-Type": "application/json", "x-internal-secret": "dev-internal-secret" };
-r = await fetch(`${base}/v1/internal/deal-estado`, { method: "POST", headers: INT, body: JSON.stringify({ nroSolicitud: 908812, stage: "Coordinación" }) });
+r = await fetch(`${base}/v1/internal/deal-estado`, { method: "POST", headers: INT, body: JSON.stringify({ nroSolicitud: 908812, stage: "Nueva Solicitud" }) });
 j = await r.json();
-check("POST internal con secret → 200 skipped (stage sin mapear)", r.status === 200 && j.status === "skipped", `got ${r.status} ${JSON.stringify(j)}`);
+check("POST internal 'Nueva Solicitud' → 200 skipped (stage no notificable)", r.status === 200 && j.status === "skipped", `got ${r.status} ${JSON.stringify(j)}`);
+
+// Mapeo B2B real (E-07): Agendado B2B → COORDINACIÓN (ML en modo mock).
+r = await fetch(`${base}/v1/internal/deal-estado`, { method: "POST", headers: INT, body: JSON.stringify({ nroSolicitud: 908812, stage: "Agendado B2B" }) });
+j = await r.json();
+check("POST internal 'Agendado B2B' → 200 sent COORDINACIÓN", r.status === 200 && j.status === "sent" && j.estado === "COORDINACIÓN", `got ${r.status} ${JSON.stringify(j)}`);
+
+// FINALIZADO sin LinkResultado → 422 (validación de dominio, NO 502: ML nunca se llama).
+r = await fetch(`${base}/v1/internal/deal-estado`, { method: "POST", headers: INT, body: JSON.stringify({ nroSolicitud: 908812, stage: "Completado" }) });
+j = await r.json();
+check("POST internal 'Completado' sin LinkResultado → 422 UNPROCESSABLE", r.status === 422 && j?.error?.code === "UNPROCESSABLE", `got ${r.status} ${JSON.stringify(j)}`);
 
 r = await fetch(`${base}/v1/internal/deal-estado`, { method: "POST", headers: INT, body: JSON.stringify({ stage: "X" }) });
 j = await r.json();

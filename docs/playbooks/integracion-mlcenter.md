@@ -1,7 +1,7 @@
 ---
 title: Integración con ML (MLCenter / AutoCheck) — inbound + outbound
 status: borrador-para-validacion
-last_reviewed: 2026-06-25
+last_reviewed: 2026-07-01
 ---
 
 # Integración con ML (MLCenter / AutoCheck)
@@ -74,9 +74,13 @@ contra el sandbox de ML (faltan credenciales).
 
 ## Lo que falta para activarlo (open questions)
 
-- **[OQ-N6](../OPEN-QUESTIONS.md)** — mapeo `Deal.Stage` (CRM) → `Estado` (ML). Hoy
-  `STAGE_TO_ESTADO` es un **placeholder vacío** en `notify-estado-change.ts`: sin mapeo, todo
-  cae en `skipped`. Cargar los valores reales del picklist `Stage`.
+- **[OQ-N6](../OPEN-QUESTIONS.md)** — mapeo `Deal.Stage` (CRM) → `Estado` (ML). **✅ (b) mapeo
+  confirmado e implementado** (Nestor 2026-07-01) en `STAGE_TO_ESTADO` (`notify-estado-change.ts`):
+  `Agendado B2B`→`COORDINACIÓN`; `Completado`/`Cerrado`→`FINALIZADO` (requiere `LinkResultado`);
+  `Nueva Solicitud`/`Cancelado`→sin notificar (`skipped`). **Residual 🔴 (a):** falta confirmar la
+  **fuente del disparo** — el field-tracker trackea `Informes_Revision.Estado`, no `Deals.Stage`; el
+  diseño asume `Deals.Stage` (consistente con el endpoint `deal-estado`). Si fuera `Estado`, cambian
+  las claves del mapa.
 - **[OQ-N7](../OPEN-QUESTIONS.md)** — origen del `LinkResultado` (FINALIZADO): ¿el PDF del
   informe (Creator/WorkDrive `pdf_url`) o un link público distinto?
 - **[OQ-P9](../OPEN-QUESTIONS.md)** — credenciales `authenticatecardoc` (Usuario/Password) →
@@ -87,6 +91,8 @@ contra el sandbox de ML (faltan credenciales).
 ## Operación
 
 - El token JWT se cachea ~1h; ante `401` el adapter lo descarta y re-loguea.
-- Reintentos: un fallo de ML devuelve `502 UPSTREAM_ERROR` aguas arriba; la política de
-  retry/backoff del disparo (workflow CRM o un worker) se define al activar — runbook
-  pendiente (ver [../runbooks/_template.md](../runbooks/_template.md)).
+- Códigos de la ruta interna: `200 sent` (notificado) · `200 skipped` (stage no notificable) ·
+  **`422 UNPROCESSABLE`** (validación: FINALIZADO sin `LinkResultado` — ML **no** se llama, no
+  reintentable) · **`502 UPSTREAM_ERROR{mlcenter}`** (fallo REAL de ML — reintentable).
+- Reintentos: solo el `502` (fallo de ML) es candidato a retry/backoff del disparo (workflow CRM
+  o un worker); se define al activar — runbook pendiente (ver [../runbooks/_template.md](../runbooks/_template.md)).
