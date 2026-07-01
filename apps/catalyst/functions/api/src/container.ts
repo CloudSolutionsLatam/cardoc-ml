@@ -26,12 +26,15 @@ import {
   type TokensRepository,
 } from "@cardoc/persistence";
 import {
+  createReportDetailFetcher,
+  createWorkDriveImageFetcher,
   MockCrmClient,
   MockMlCenterClient,
   MockReportsSource,
   MlCenterHttpClient,
   ZohoCreatorReportsSource,
   ZohoCrmClient,
+  type CreatorConnection,
   type CrmClient,
   type CrmConnection,
   type MlCenterClient,
@@ -138,6 +141,36 @@ async function resolveZohoAccessToken(catalystApp: unknown): Promise<string> {
     .getAccessToken();
 }
 
+/**
+ * Conexión a Creator/WorkDrive (Environment Variables). ⚠️ La URL REST exacta de la Custom API y
+ * el mecanismo de auth server-to-server están por confirmar (ver `providers/creator-client.ts`);
+ * el access token reusa el self-client (el refresh token necesita scopes de Creator + WorkDrive).
+ */
+function resolveCreatorConnection(catalystApp: unknown): CreatorConnection {
+  let tokenPromise: Promise<string> | undefined;
+  return {
+    reportDetailUrl: process.env["CREATOR_REPORT_DETAIL_URL"] ?? "",
+    publicKey: process.env["CREATOR_PUBLIC_KEY"] ?? "",
+    getAccessToken: () => (tokenPromise ??= resolveZohoAccessToken(catalystApp)),
+  };
+}
+
+/** Arma el adapter Creator real con los fetchers HTTP (report detail + fotos de WorkDrive). */
+function buildCreatorReports(conn: CreatorConnection): ReportsSource {
+  const generatedAt = new Date().toLocaleString("es-UY", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+  return new ZohoCreatorReportsSource({
+    fetchReportDetail: createReportDetailFetcher(conn),
+    fetchImage: createWorkDriveImageFetcher(conn),
+    generatedAt,
+  });
+}
+
 /** Repos + adapters por request: DataStore (si el flag está) o in-memory sembrado. */
 export function buildContainer(req: unknown): ApiContainer {
   const crm: CrmClient = useZohoCrm ? new ZohoCrmClient() : memCrm;
@@ -150,16 +183,16 @@ export function buildContainer(req: unknown): ApiContainer {
         "(o CARDOC_PERSISTENCE=datastore para resolver el token con el self-client del SDK).",
     );
   }
-  const reports: ReportsSource = useCreator ? new ZohoCreatorReportsSource() : memReports;
-
   if (useDatastore) {
     // El runtime NO provee el SDK: se externaliza en el bundle y se shippea como node_modules
     // real (scripts/deploy-prep-sdk.mjs). Se carga LAZY acá (en memory mode no se requiere). ADR-0010.
     const catalyst = require("zcatalyst-sdk-node") as { initialize(req: unknown): CatalystAppLike };
     const app = catalyst.initialize(req);
     const repos = createCatalystRepositories(app);
+    const reports: ReportsSource = useCreator ? buildCreatorReports(resolveCreatorConnection(app)) : memReports;
     return { ...repos, crm, connection: resolveCrmConnection(app), reports, mlCenter };
   }
+  const reports: ReportsSource = useCreator ? buildCreatorReports(resolveCreatorConnection(req)) : memReports;
   return {
     tokens: memTokens,
     consumers: memConsumers,

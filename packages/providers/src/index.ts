@@ -8,5 +8,7 @@ export * from "./errors";
 export * from "./crm-client";
 export * from "./reports-source";
 export * from "./report-transform";
+export * from "./portal-type";
+export * from "./creator-client";
 export * from "./pdf-generator";
 export * from "./mlcenter-client";

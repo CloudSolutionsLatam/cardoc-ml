@@ -29,11 +29,13 @@ estado). Detalle: [`../ARQUITECTURA.md`](../ARQUITECTURA.md) · integración:
 [`playbooks/integracion-mlcenter.md`](playbooks/integracion-mlcenter.md).
 
 > **Estado (2026-07-01): E-01 completo y deployable.** Verde verificado: `tsc -b`,
-> `eslint`, bundle esbuild, suite local 68 tests + smoke local 21/21. Alta real validada
-> en Catalyst (DataStore + Zoho) vía `scripts/smoke-catalyst-crm.mjs` → 5/5. La lógica de
-> E-02/E-03 (use-cases + puertos) está construida; `ZohoCrmClient` (CRM) **implementado**
-> (E-02) y el **DataStore productivo** operativo, mientras `ZohoCreatorReportsSource` (E-03)
-> sigue stub. Sprint 22/06→03/07/2026, owner Nestor Toñanez, 1 dev.
+> `eslint`, bundle esbuild, suite local 120 tests + smoke local 23/23. Alta real validada
+> en Catalyst (DataStore + Zoho) vía `scripts/smoke-catalyst-crm.mjs` → 5/5. `ZohoCrmClient`
+> (CRM) **implementado** (E-02) + DataStore productivo operativo. **E-03: la generación del
+> PDF está** — cardoc-ml es el **generador único** (pdf-lib), reconstruye el informe real
+> (`transformReportData` + `PdfLibReportGenerator`) y `ZohoCreatorReportsSource.openPdf` corre
+> el pipeline; falta cablear el **acceso REST real a Creator/WorkDrive** (⚠️ endpoint/auth por
+> confirmar, config-driven). Sprint 22/06→03/07/2026, owner Nestor Toñanez, 1 dev.
 
 ## El modelo mental
 
@@ -111,19 +113,22 @@ externo, detrás de un puerto.
 
 ### "Cablear un adapter real (CRM / Creator-WorkDrive)"
 
-Hoy `ZohoCreatorReportsSource` (Creator/WorkDrive, E-03) lanza `NotImplementedError`;
-`ZohoCrmClient` ya está implementado (E-02). Para implementar el que falta:
+`ZohoCrmClient` (E-02) ✅ implementado. `ZohoCreatorReportsSource` (E-03): **`openPdf`
+implementado** — trae el detalle por REST, valida el envelope, aplica la defensa `portalType`,
+`transformReportData` → genera el PDF (pdf-lib) → streamea; `listByAccount`/`findById` quedan
+`NotImplemented` (listado descartado, ADR-0015). La **generación del informe real ya está**
+(transform + layout fieles al portal); lo que falta es cablear el **acceso real a Creator**:
 
-1. [`playbooks/secretos-y-connections.md`](playbooks/secretos-y-connections.md) — cómo se
-   resuelve el `accessToken` por self-client OAuth (SDK) y dónde viven los secretos.
-2. `packages/providers/src/crm-client.ts` / `reports-source.ts` — implementá los métodos
-   del puerto. **El `fetch`/HTTP externo solo puede vivir acá** (lo exige el lint).
-3. `apps/catalyst/functions/api/src/container.ts` — activá el adapter real con el flag
-   (`CARDOC_CRM_MODE=zoho` / `CARDOC_REPORTS_MODE=creator`).
-4. **Parcialmente bloqueado** (ver abajo): faltan los API names de los módulos estándar
-   Contacts/Deals/Accounts y el flujo del PDF. ✅ Stage = `Nueva Solicitud`, campos
-   `Cedula`/`EXTERNAL_ID` creados. Confirmá con Nestor
-   antes de codear sobre supuestos.
+1. [`playbooks/secretos-y-connections.md`](playbooks/secretos-y-connections.md) — self-client
+   OAuth (SDK) y dónde viven los secretos.
+2. `packages/providers/src/creator-client.ts` — el `fetch` HTTP server-to-server a Creator/WorkDrive
+   (config-driven: `CreatorConnection`). **⚠️ el endpoint REST exacto de la Custom API y el auth
+   server-to-server están por confirmar** (el portal usa el SDK cliente + token de sesión; cardoc-ml
+   NO puede). `report-transform.ts` (raw → `InformeReport`) y `pdf-generator.ts` ya están.
+3. `apps/catalyst/functions/api/src/container.ts` — `CARDOC_CRM_MODE=zoho` /
+   `CARDOC_REPORTS_MODE=creator`; env: `CREATOR_REPORT_DETAIL_URL`, `CREATOR_PUBLIC_KEY`.
+4. Fotos: inyectar el `ImageFetcher` de WorkDrive (OAuth) — hoy sin fetcher van como placeholder.
+   Confirmá con Nestor el endpoint/auth de Creator antes de activar `creator`.
 
 ### "Tocar auth, scopes, tenancy o cap"
 

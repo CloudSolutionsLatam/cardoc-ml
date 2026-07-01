@@ -8,8 +8,11 @@
  */
 import type { InformeReport, InformeRevision, ListInformesQuery, Page } from "@cardoc/domain";
 import { Readable } from "node:stream";
-import { NotImplementedError, ReportNotFoundError } from "./errors";
-import { PdfLibReportGenerator, type PdfGenerator } from "./pdf-generator";
+import { NotImplementedError, ReportNotFoundError, UpstreamError } from "./errors";
+import { PdfLibReportGenerator, type ImageFetcher, type PdfGenerator } from "./pdf-generator";
+import { transformReportData } from "./report-transform";
+import type { ReportDetailFetcher } from "./creator-client";
+import { PORTAL_TYPE, shouldRejectDetailByPortalType } from "./portal-type";
 
 /** Resultado del stream del PDF: el `Readable` se pipea directo al `res` de Express. */
 export interface ReportPdf {
@@ -149,21 +152,62 @@ export class MockReportsSource implements ReportsSource {
   }
 }
 
+export interface ZohoCreatorReportsSourceDeps {
+  /** Trae el envelope crudo del informe (HTTP server-to-server; ver creator-client.ts). */
+  fetchReportDetail: ReportDetailFetcher;
+  /** Fetcher de fotos de WorkDrive (OAuth). Sin él, las fotos van como placeholder. */
+  fetchImage?: ImageFetcher;
+  /** Texto "Generado:" del PDF (el container estampa la fecha del request). */
+  generatedAt?: string;
+  /** Inyectable para tests; por defecto pdf-lib con el `fetchImage`/`generatedAt` provistos. */
+  pdfGenerator?: PdfGenerator;
+}
+
 /**
- * Adapter real Zoho Creator + WorkDrive. STUB — se implementa en E-03. `openPdf`
- * encapsula la generación perezosa con caché (Analisis.pdf_url → WorkDrive | generar
- * → write-back). Único lugar autorizado a hablar HTTP con Creator/WorkDrive.
+ * Adapter real Zoho Creator + WorkDrive (E-03). `openPdf`: trae el detalle por REST →valida el
+ * envelope →aplica la defensa `portalType` →`transformReportData` →genera el PDF (fotos desde
+ * WorkDrive) →streamea. Único lugar autorizado a HTTP con Creator/WorkDrive.
+ *
+ * El **listado** (`listByAccount`/`findById`) queda sin implementar: ML es push, el pull se
+ * descartó (ADR-0015). La resolución perezosa con caché (`Analisis.pdf_url` → stream | generar +
+ * write-back) es un paso posterior; hoy se **genera siempre** desde los datos del detalle.
  */
 export class ZohoCreatorReportsSource implements ReportsSource {
+  private readonly gen: PdfGenerator;
+  constructor(private readonly deps: ZohoCreatorReportsSourceDeps) {
+    this.gen = deps.pdfGenerator ?? new PdfLibReportGenerator({ fetchImage: deps.fetchImage, generatedAt: deps.generatedAt });
+  }
+
   async listByAccount(_accountId: string, _query: ListInformesQuery): Promise<Page<InformeRevision>> {
-    throw new NotImplementedError("ZohoCreatorReportsSource", "listByAccount");
+    throw new NotImplementedError("ZohoCreatorReportsSource", "listByAccount"); // ADR-0015: listado descartado
   }
 
   async findById(_accountId: string, _id: string): Promise<InformeRevision | null> {
-    throw new NotImplementedError("ZohoCreatorReportsSource", "findById");
+    throw new NotImplementedError("ZohoCreatorReportsSource", "findById"); // ADR-0015
   }
 
-  async openPdf(_accountId: string, _id: string): Promise<ReportPdf> {
-    throw new NotImplementedError("ZohoCreatorReportsSource", "openPdf");
+  async openPdf(_accountId: string, id: string): Promise<ReportPdf> {
+    const env = await this.deps.fetchReportDetail(id, PORTAL_TYPE);
+    // Envelope: cualquier code != 3000 (o env/result ausente) es error del upstream (§4.1).
+    if (!env || env.code !== 3000 || !env.result) {
+      throw new UpstreamError("creator", 502, `envelope inválido (code=${env?.code ?? "?"})`);
+    }
+    const result = env.result;
+    // result de ERROR del upstream: `status` numérico >=400 (401 UNAUTHORIZED, 403, 500…). → 502,
+    // NUNCA transformar (un result de error daría un PDF vacío con 200, enmascarando la falla).
+    if (typeof result.status === "number" && result.status >= 400) {
+      throw new UpstreamError("creator", 502, `Creator error (status=${result.status}${result.error ? ` ${result.error}` : ""})`);
+    }
+    // Defensa portalType (§5.3): recurso de otro portal → NOT_FOUND (no revelar existencia).
+    if (shouldRejectDetailByPortalType(result, PORTAL_TYPE)) {
+      throw new ReportNotFoundError(id);
+    }
+    const informe = transformReportData(result);
+    const bytes = await this.gen.generate(informe);
+    return {
+      stream: Readable.from(Buffer.from(bytes)),
+      contentType: "application/pdf",
+      filename: `informe-${id}.pdf`,
+    };
   }
 }
