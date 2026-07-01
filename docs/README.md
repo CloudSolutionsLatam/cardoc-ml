@@ -44,9 +44,18 @@ calidad, operaciones, plan, contratos) viven en la raíz del repo; acá están l
 
 ## Runbooks — qué hacer cuando algo falla
 
-| Runbook | Estado |
-|---------|--------|
-| [runbooks/_template.md](runbooks/_template.md) | Plantilla. Los runbooks concretos se escriben como dry-run pre-producción (ver [../OPERACIONES.md](../OPERACIONES.md) §5). |
+| Runbook | Disparador | Dry-run |
+|---------|-----------|---------|
+| [runbooks/outage-crm.md](runbooks/outage-crm.md) | `502 UPSTREAM_ERROR{crm}` en el alta; oportunidades en `error` | ⚙️ en dev (credencial inválida) |
+| [runbooks/outage-creator-workdrive.md](runbooks/outage-creator-workdrive.md) | `502{creator\|workdrive}` en informes/PDF | mock hoy; ⚙️ adapter real (E-03) |
+| [runbooks/cap-mal-configurado.md](runbooks/cap-mal-configurado.md) | `429 CAP_EXCEEDED` a automotora legítima | ✅ local (probado 2026-07-01) |
+| [runbooks/idempotencia-conflicto.md](runbooks/idempotencia-conflicto.md) | `409 IDEMPOTENCY_CONFLICT` (clave reusada, payload distinto) | ✅ smoke (local + Catalyst) |
+| [runbooks/token-comprometido.md](runbooks/token-comprometido.md) | Fuga de token → rotación de emergencia | ⚙️ en dev (revoke) |
+| [runbooks/pdf-no-disponible.md](runbooks/pdf-no-disponible.md) | `404 PDF_NOT_AVAILABLE` (`Analisis.pdf_url` vacío) | 🔴 bloqueado (OQ-N1, E-03) |
+| [runbooks/_template.md](runbooks/_template.md) | Plantilla para nuevos runbooks | — |
+
+> Pendiente: `restore-datastore` — bloqueado por el mecanismo de backup/export (OQ-P7,
+> ⚠️ sin confirmar); no se escribe con pasos inventados.
 
 > Convención (heredada del método de cfe-catalyst): un runbook se escribe **antes** de
 > necesitarlo y se prueba con un dry-run — un runbook sin dry-run es una expresión de deseo.

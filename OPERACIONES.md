@@ -189,17 +189,17 @@ Punto de partida de todo diagnóstico: tomar el `correlationId` del request afec
 (va en el header `X-Correlation-Id` de la respuesta) y reconstruir la traza en `audit_log`
 (`searchByCorrelationId`).
 
-**Índice de runbooks** (pendientes de escribir + dry-run pre-producción):
+**Índice de runbooks** (6 escritos en `docs/runbooks/`; dry-run según estado):
 
-| Slug | Síntoma / disparador | Códigos relacionados |
-|------|----------------------|----------------------|
-| `outage-crm` | Zoho CRM no responde / rechaza altas (Contacts/Deals/Accounts) | `UPSTREAM_ERROR` 502; oportunidades en `error` |
-| `outage-creator-workdrive` | Zoho Creator / WorkDrive caído → no se listan informes ni se streamea PDF | `UPSTREAM_ERROR` 502; `PDF_NOT_AVAILABLE` 404 |
-| `pdf-no-disponible` | `Analisis.pdf_url` vacío y la generación de PDF falla | `PDF_NOT_AVAILABLE` 404 (ver open question §8) |
-| `cap-mal-configurado` | Cap demasiado bajo → automotora legítima bloqueada | `CAP_EXCEEDED` 429 |
-| `token-comprometido` | Sospecha de fuga de un token de automotora | rotación de emergencia (ver [§6](#6-calendario-de-rotaciones)) |
-| `idempotencia-conflicto` | Mismo `NroSolicitud` con payload distinto | `IDEMPOTENCY_CONFLICT` 409 |
-| `restore-datastore` | Pérdida/corrupción de datos del DataStore | **mecanismo de backup/export ⚠️ verificar** |
+| Slug | Síntoma / disparador | Códigos relacionados | Dry-run |
+|------|----------------------|----------------------|---------|
+| [`outage-crm`](docs/runbooks/outage-crm.md) | Zoho CRM no responde / rechaza altas (Contacts/Deals/Accounts) | `UPSTREAM_ERROR` 502; oportunidades en `error` | ⚙️ dev |
+| [`outage-creator-workdrive`](docs/runbooks/outage-creator-workdrive.md) | Zoho Creator / WorkDrive caído → no se listan informes ni se streamea PDF | `UPSTREAM_ERROR` 502; `PDF_NOT_AVAILABLE` 404 | mock hoy; ⚙️ E-03 |
+| [`pdf-no-disponible`](docs/runbooks/pdf-no-disponible.md) | `Analisis.pdf_url` vacío y la generación de PDF falla | `PDF_NOT_AVAILABLE` 404 (ver open question §8) | 🔴 OQ-N1/E-03 |
+| [`cap-mal-configurado`](docs/runbooks/cap-mal-configurado.md) | Cap demasiado bajo → automotora legítima bloqueada | `CAP_EXCEEDED` 429 | ✅ local (2026-07-01) |
+| [`token-comprometido`](docs/runbooks/token-comprometido.md) | Sospecha de fuga de un token de automotora | rotación de emergencia (ver [§6](#6-calendario-de-rotaciones)) | ⚙️ dev |
+| [`idempotencia-conflicto`](docs/runbooks/idempotencia-conflicto.md) | Mismo `NroSolicitud` / clave con payload distinto | `IDEMPOTENCY_CONFLICT` 409 | ✅ smoke |
+| `restore-datastore` | Pérdida/corrupción de datos del DataStore | **mecanismo de backup/export ⚠️ verificar** | 🔴 pendiente (OQ-P7) |
 
 **Sobre de error único** (los 3 endpoints) — todo runbook lo usa para clasificar:
 

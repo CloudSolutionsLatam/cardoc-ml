@@ -34,6 +34,7 @@ Causa raíz. Qué cambiar para que no se repita. Tickets abiertos.
 
 ---
 
-**Runbooks pendientes de escribir** (dry-run pre-producción): outage de CRM ·
-outage de Creator/WorkDrive (informes/PDF) · cap mal configurado · credencial/token
-comprometido (rotación de emergencia) · PDF que no se genera (Analisis.pdf_url vacío).
+**Runbooks escritos** (ver [../README.md](../README.md) §Runbooks y
+[../../OPERACIONES.md](../../OPERACIONES.md) §5): `outage-crm` · `outage-creator-workdrive` ·
+`cap-mal-configurado` · `idempotencia-conflicto` · `token-comprometido` · `pdf-no-disponible`.
+**Pendiente:** `restore-datastore` (bloqueado por el mecanismo de backup/export, OQ-P7).
