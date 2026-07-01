@@ -7,6 +7,7 @@
 // Uso: node scripts/bundle-function.mjs <nombre>   (cwd = carpeta de la función)
 import { build } from "esbuild";
 import { resolve } from "node:path";
+import { EXTERNALS } from "./function-externals.mjs";
 
 const name = process.argv[2] ?? "function";
 const cwd = process.cwd();
@@ -19,10 +20,12 @@ await build({
   target: "node24",
   format: "cjs",
   sourcemap: true,
-  // SOLO zcatalyst-sdk-node es external: lo provee el runtime de Catalyst. El resto
-  // (express, zod, @cardoc/*) se INLINEA — Catalyst NO instala las deps del package.json,
-  // así que externalizar express daba "Cannot find module 'express'" en runtime.
-  external: ["zcatalyst-sdk-node"],
+  // Los EXTERNALS (ver scripts/function-externals.mjs) NO se inlinan: `zcatalyst-sdk-node` hace
+  // `require` dinámicos de submódulos (`./zcql/zcql`) que esbuild no puede resolver. Se shippean
+  // como node_modules REAL en el function dir vía scripts/deploy-prep-sdk.mjs (los symlinks de
+  // pnpm se rompen al zipear) — ver ADR-0010. El resto (express, zod, @cardoc/*) SÍ se inlinea
+  // (Catalyst no instala deps del package.json).
+  external: EXTERNALS,
   logLevel: "info",
 });
 

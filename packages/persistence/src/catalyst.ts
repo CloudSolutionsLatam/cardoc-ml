@@ -10,8 +10,10 @@
  *   app.datastore().table(name).insertRow / updateRow
  *   app.zcql().executeZCQLQuery(sql)  → [{ <tableName>: { ...columns } }]
  *
- * Columnas en snake_case del DataStore ↔ camelCase del dominio. El UNIQUE
- * (account_id, idempotency_key) en `crm_opportunities` se crea en la consola de Catalyst.
+ * Columnas en snake_case del DataStore ↔ camelCase del dominio. La red física de la
+ * idempotencia Capa 1 es UNIQUE(idempotency_key) single-column en `crm_opportunities` (la UI de
+ * Catalyst NO permite UNIQUE compuesto); se crea en la consola. El filtro por account_id en las
+ * queries es defensa de tenancy, no parte del índice.
  */
 import type { Scope } from "@cardoc/domain";
 import type {
@@ -237,8 +239,9 @@ export class CatalystOpportunitiesRepository implements OpportunitiesRepository 
       });
       return { row: this.map(inserted), created: true };
     } catch (e) {
-      // El UNIQUE(account_id, idempotency_key) rechaza el segundo insert concurrente →
-      // buscamos el existente: esa es la red FÍSICA anti-duplicación (AC-08).
+      // El UNIQUE(idempotency_key) rechaza el segundo insert concurrente → buscamos el
+      // existente (query filtrada también por account_id como defensa de tenancy): esa es
+      // la red FÍSICA anti-duplicación (AC-08).
       const existing = await this.findRaw(record.accountId, record.idempotencyKey);
       if (existing) {
         return { row: this.map(existing), created: false };
@@ -289,7 +292,7 @@ export class CatalystAuditLogRepository implements AuditLogRepository {
 
   async append(entry: AuditLogEntry): Promise<void> {
     await this.app.datastore().table(AUDIT).insertRow({
-      timestamp: entry.timestamp,
+      _timestamp: entry.timestamp, // "timestamp" es palabra reservada en Catalyst → columna "_timestamp"
       correlation_id: entry.correlationId,
       consumer_id: entry.consumerId,
       account_id: entry.accountId,
@@ -311,7 +314,7 @@ export class CatalystAuditLogRepository implements AuditLogRepository {
       .map((w) => w[AUDIT])
       .filter((r): r is Row => Boolean(r))
       .map((r) => ({
-        timestamp: str(r["timestamp"]),
+        timestamp: str(r["_timestamp"]), // columna "_timestamp" (reservada sin guion)
         correlationId: str(r["correlation_id"]),
         consumerId: str(r["consumer_id"]),
         accountId: str(r["account_id"]),

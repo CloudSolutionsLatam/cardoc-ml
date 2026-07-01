@@ -153,7 +153,8 @@ export function buildContainer(req: unknown): ApiContainer {
   const reports: ReportsSource = useCreator ? new ZohoCreatorReportsSource() : memReports;
 
   if (useDatastore) {
-    // El SDK de Catalyst lo provee el runtime; se carga LAZY (en memory mode no se requiere).
+    // El runtime NO provee el SDK: se externaliza en el bundle y se shippea como node_modules
+    // real (scripts/deploy-prep-sdk.mjs). Se carga LAZY acá (en memory mode no se requiere). ADR-0010.
     const catalyst = require("zcatalyst-sdk-node") as { initialize(req: unknown): CatalystAppLike };
     const app = catalyst.initialize(req);
     const repos = createCatalystRepositories(app);

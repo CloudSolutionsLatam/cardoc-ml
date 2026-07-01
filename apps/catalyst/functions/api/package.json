@@ -6,7 +6,9 @@
   "main": "index.js",
   "scripts": {
     "typecheck": "tsc -b",
-    "build": "tsc -b && node ../../../../scripts/bundle-function.mjs api"
+    "build": "tsc -b && node ../../../../scripts/bundle-function.mjs api",
+    "deploy:prep": "node ../../../../scripts/deploy-prep-sdk.mjs",
+    "predeploy": "pnpm build && pnpm deploy:prep"
   },
   "dependencies": {
     "express": "4.19.2",
