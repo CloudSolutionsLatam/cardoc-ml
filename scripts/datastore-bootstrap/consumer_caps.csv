@@ -1,1 +1,4 @@
 consumer_id,endpoint,limit_hour,limit_day,limit_week
+consumer_ml,opportunity-contact,60,,
+consumer_ml,informes-list,120,,
+consumer_ml,informes-pdf,100,,
