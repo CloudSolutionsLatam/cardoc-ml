@@ -34,6 +34,9 @@ const CONTENT_W = A4.w - 2 * MARGIN;
 const BOTTOM = 54; // margen inferior (deja lugar para el pie)
 const MAX_PHOTOS = 6; // tope de fotos por componente
 const IMAGE_CONCURRENCY = 8; // descargas de fotos en paralelo (tope; la red es el cuello de botella)
+// Las fotos son EVIDENCIA de inspección (motores, detalles finos): se embeben en su calidad/resolución
+// ORIGINAL, sin recomprimir (bajar calidad arruinaría el detalle; las fuentes ya son ~1080px). El peso
+// del PDF (302 fotos → ~126 MB) es inherente; la usabilidad se resuelve con caché/portal, no degradando.
 
 const INK = rgb(0.17, 0.17, 0.17);
 const MUTED = rgb(0.6, 0.6, 0.62);
@@ -347,25 +350,30 @@ export class PdfLibReportGenerator implements PdfGenerator {
 
   private componentCard(L: Layout, d: ReportDetalle, images: Map<string, PDFImage>): void {
     const innerW = CONTENT_W - 20;
-    // Medir el alto para no cortar la tarjeta entre páginas (break-inside: avoid).
-    // Cap por bloque: acota el alto máximo de la tarjeta MUY por debajo de una página (evita que
-    // una tarjeta con texto libre gigante —sin tope upstream— se derrame sobre el pie / fuera de hoja).
     const titleLines = capLines(wrapText(d.tituloJerarquico, L.bold, 11, innerW - 70), 4);
     const descLines = d.descripcion ? capLines(wrapText(d.descripcion, L.reg, 10, innerW), 14) : [];
     const notaLines = d.nota ? capLines(wrapText(`Nota del inspector: ${d.nota}`, L.reg, 9.5, innerW), 4) : [];
     const diagLines = d.aiSummary ? capLines(wrapText(d.aiSummary, L.reg, 10, innerW), 14) : [];
     const photos = d.imagenes.slice(0, MAX_PHOTOS);
     const loaded = photos.map((u) => images.get(u)).filter((x): x is PDFImage => x !== undefined);
-    const photoRows = loaded.length ? Math.ceil(loaded.length / 3) : 0;
     const hasMedia = d.audioData.length > 0 || d.videoData.length > 0;
 
+    // ── Bloque de TEXTO (tarjeta con borde de color por estado). Las fotos van APARTE, grandes. ──
+    // Solo texto: alto acotado (< 1 página). Las fotos NO van dentro de la tarjeta (fluyen abajo).
+    const notes: string[] = [];
+    if (loaded.length === 0 && photos.length) notes.push(`${photos.length} foto(s) no disponibles`);
+    if (hasMedia) {
+      const parts: string[] = [];
+      if (d.audioData.length) parts.push(`${d.audioData.length} audio(s)`);
+      if (d.videoData.length) parts.push(`${d.videoData.length} video(s)`);
+      notes.push(`${parts.join(" · ")} — disponible(s) en la versión digital`);
+    }
     const h =
       10 + Math.max(16, titleLines.length * 14) +
       descLines.length * 13 +
       (notaLines.length ? 6 + notaLines.length * 12 : 0) +
       (diagLines.length ? 4 + diagLines.length * 13 : 0) +
-      photoRows * 66 +
-      (hasMedia ? 16 : 0) +
+      (notes.length ? 16 : 0) +
       12;
 
     L.ensure(h + 8);
@@ -376,14 +384,12 @@ export class PdfLibReportGenerator implements PdfGenerator {
 
     let cy = top - 16;
     const x = MARGIN + 12;
-    // Título + chip de estado.
     for (const line of titleLines) {
       L.text(line, x, cy, 11, L.bold, INK);
       cy -= 14;
     }
     const chip = ESTADO_LABEL[d.estado].toUpperCase();
     L.text(chip, A4.w - MARGIN - 12 - L.bold.widthOfTextAtSize(chip, 8), top - 15, 8, L.bold, color);
-
     for (const line of descLines) {
       L.text(line, x, cy, 10, L.reg, rgb(0.3, 0.3, 0.32));
       cy -= 13;
@@ -402,32 +408,29 @@ export class PdfLibReportGenerator implements PdfGenerator {
         cy -= 13;
       }
     }
-    // Fotos (grilla de 3 por fila) o placeholder si no se pudieron cargar.
-    if (loaded.length) {
-      cy -= 4;
-      const gap = 6;
-      const cellW = (innerW - 2 * gap) / 3;
-      loaded.forEach((img, i) => {
-        const col = i % 3;
-        const row = Math.floor(i / 3);
-        const px = x + col * (cellW + gap);
-        const py = cy - row * 66 - 60;
-        const { width, height } = img.size();
-        const s = Math.min(cellW / width, 58 / height);
-        L.page.drawImage(img, { x: px, y: py, width: width * s, height: height * s });
-      });
-      cy -= photoRows * 66;
-    } else if (photos.length) {
-      L.text(`${photos.length} foto(s) no disponibles`, x, cy - 4, 8.5, L.reg, MUTED);
-      cy -= 14;
-    }
-    if (hasMedia) {
-      const parts: string[] = [];
-      if (d.audioData.length) parts.push(`${d.audioData.length} audio(s)`);
-      if (d.videoData.length) parts.push(`${d.videoData.length} video(s)`);
-      L.text(`${parts.join(" · ")} — disponible(s) en la versión digital`, x, cy - 4, 8.5, L.reg, MUTED);
-    }
+    if (notes.length) L.text(this.fit(notes.join("   |   "), L.reg, 8.5, innerW), x, cy - 4, 8.5, L.reg, MUTED);
     L.y = top - h - 8;
+
+    // ── Fotos GRANDES (~2 por página): fluyen debajo del texto y paginan solas. ──
+    const caption = d.titulo || d.tituloJerarquico;
+    loaded.forEach((img, i) => {
+      const cap = loaded.length > 1 ? `${caption} — foto ${i + 1}/${loaded.length}` : caption;
+      this.drawLargePhoto(L, img, cap);
+    });
+  }
+
+  /** Dibuja una foto GRANDE (hasta ~media página → ~2 por página), centrada, con caption. Pagina sola. */
+  private drawLargePhoto(L: Layout, img: PDFImage, caption: string): void {
+    const maxH = 330; // ~media página útil → dos fotos entran por hoja
+    const { width, height } = img.size();
+    const s = Math.min(CONTENT_W / width, maxH / height);
+    const w = width * s;
+    const hImg = height * s;
+    L.ensure(12 + hImg + 14); // caption + foto + gap; si no entra, salta de página
+    L.text(this.fit(caption, L.reg, 8, CONTENT_W), MARGIN, L.y - 8, 8, L.reg, MUTED);
+    L.y -= 12;
+    L.page.drawImage(img, { x: MARGIN + (CONTENT_W - w) / 2, y: L.y - hImg, width: w, height: hImg });
+    L.y -= hImg + 14;
   }
 
   /**
@@ -443,7 +446,7 @@ export class PdfLibReportGenerator implements PdfGenerator {
     const urls = [...new Set(detalles.flatMap((d) => d.imagenes.slice(0, MAX_PHOTOS)))];
     if (!urls.length) return map;
 
-    // 1) Descarga concurrente con tope: workers que consumen la lista de URLs.
+    // 1) Descarga concurrente con tope: workers que consumen la lista de URLs (bytes ORIGINALES).
     const bytesByUrl = new Map<string, Uint8Array>();
     let next = 0;
     const worker = async (): Promise<void> => {

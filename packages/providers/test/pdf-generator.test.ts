@@ -8,6 +8,12 @@ import { PDFDocument, StandardFonts } from "pdf-lib";
 import type { InformeReport, ReportDetalle } from "@cardoc/domain";
 import { capLines, hardBreak, PdfLibReportGenerator, wrapText } from "../src/pdf-generator";
 
+/** PNG 8x8 rojo válido (fixture para probar el embed de fotos, sin depender de una lib de imágenes). */
+const TINY_PNG = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAYAAADED76LAAAAIElEQVR4AYXBAQEAAAiAIPP/53qQMAvLQ4IECRIkSJBwElsCDgH7XhwAAAAASUVORK5CYII=",
+  "base64",
+);
+
 const gen = new PdfLibReportGenerator({ generatedAt: "01/07/2026 10:00" });
 
 function detalle(over: Partial<ReportDetalle> = {}): ReportDetalle {
@@ -75,6 +81,15 @@ describe("PdfLibReportGenerator — informe completo", () => {
     const detalles = Array.from({ length: 30 }, (_, i) => detalle({ id: i + 1, tituloJerarquico: `Chasis - Comp ${i + 1}` }));
     const bytes = await gen.generate(report({ detalles }));
     const doc = await PDFDocument.load(bytes);
+    expect(doc.getPageCount()).toBeGreaterThan(1);
+  });
+
+  it("embebe fotos (fetch→embed, PNG original) y las pagina grandes (~2/página)", async () => {
+    const png = new Uint8Array(TINY_PNG);
+    const g = new PdfLibReportGenerator({ generatedAt: "t", fetchImage: async () => png });
+    const bytes = await g.generate(report({ detalles: [detalle({ imagenes: ["a", "b", "c"] })] }));
+    const doc = await PDFDocument.load(bytes);
+    // 3 fotos grandes (~2/página) empujan a varias hojas.
     expect(doc.getPageCount()).toBeGreaterThan(1);
   });
 });
