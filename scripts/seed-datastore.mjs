@@ -53,6 +53,9 @@ const environment = env.CATALYST_ENVIRONMENT ?? "Development";
 
 // El SDK lee el org id de esta env var para rutear la request.
 env.X_ZOHO_CATALYST_ORG_ID = env.CATALYST_ORG_ID ?? env.X_ZOHO_CATALYST_ORG_ID ?? "909785950";
+// Modo "fuera de serverless" (como el CLI): habilita el ruteo por origin admin/projectDomain.
+env.X_ZOHO_CATALYST_IS_LOCAL = env.X_ZOHO_CATALYST_IS_LOCAL ?? "true";
+const projectDomain = env.CATALYST_PROJECT_DOMAIN ?? "ml-909785950.development.catalystserverless.com";
 
 const missing = [];
 if (!projectKey) missing.push("CATALYST_PROJECT_KEY (ZAID del proyecto)");
@@ -71,7 +74,10 @@ const credential = accessToken
   ? catalyst.credential.accessToken({ access_token: accessToken })
   : catalyst.credential.refreshToken({ client_id: clientId, client_secret: clientSecret, refresh_token: refreshToken });
 
-const app = catalyst.initializeApp({ project_id: projectId, project_key: projectKey, environment, credential }, "seed");
+const app = catalyst.initializeApp(
+  { project_id: projectId, project_key: projectKey, project_domain: projectDomain, environment, credential },
+  "seed",
+);
 
 /** Parsea un CSV simple (sin comillas) -> filas objeto; Int para columnas numericas, omite celdas vacias. */
 function parseCsv(path) {
