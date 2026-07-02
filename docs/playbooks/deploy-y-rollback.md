@@ -1,7 +1,7 @@
 ---
 title: Playbook — Deploy y Rollback (cardoc-ml)
 status: scaffolding
-last_reviewed: 2026-06-30
+last_reviewed: 2026-07-02
 ---
 
 # Deploy y Rollback
@@ -31,7 +31,7 @@ Contexto que conviene tener a mano antes de operar:
 
 ## 0. Estado del proyecto al momento de este playbook
 
-E-01 (scaffold) está completo y es **deployable**. El adapter **CRM (`ZohoCrmClient`) ya está implementado** (E-02): con los secrets cargados y `CARDOC_CRM_MODE=zoho` escribe en el CRM real. El adapter de **Reports (`ZohoCreatorReportsSource`, E-03) sigue stub** → un deploy con `CARDOC_REPORTS_MODE=creator` fallará en los paths de informes/PDF. Para validar plataforma sin negocio real, se despliega con modos `mock`/`memory` (ver §6, matriz de variables).
+E-01 (scaffold) está completo y es **deployable**. El adapter **CRM (`ZohoCrmClient`) ya está implementado** (E-02): con los secrets cargados y `CARDOC_CRM_MODE=zoho` escribe en el CRM real. El adapter de **Reports (`ZohoCreatorReportsSource`, E-03) YA está implementado** (2026-07-02): `openPdf` trae el detalle de Creator (Custom API REST server-to-server) y **genera el PDF con pdf-lib on-the-fly** — un deploy con `CARDOC_REPORTS_MODE=creator` + `CREATOR_*` sirve el PDF real. Pendiente: caché/write-back a `Analisis.pdf_url` (OQ-N8) y el listado (`listByAccount` sigue `NotImplementedError`, ADR-0015). Para validar plataforma sin negocio real, se despliega con modos `mock`/`memory` (ver §6, matriz de variables).
 
 Cronograma del sprint: 22/06 → 03/07/2026. Owner: Nestor Toñanez. Equipo: 1 dev.
 
@@ -43,6 +43,10 @@ Cronograma del sprint: 22/06 → 03/07/2026. Owner: Nestor Toñanez. Equipo: 1 d
   (created + `409` por payload distinto), `stage "Nueva Solicitud"`. Requiere en la consola los env
   vars del self-client (`ZOHO_CLIENT_ID/SECRET/REFRESH_TOKEN`) + `CARDOC_CRM_MODE=zoho` +
   `CARDOC_PERSISTENCE=datastore`, y el **seed de `api_tokens`** (§6).
+- **Cierre §10 CR-003 (2026-07-02)** — deploy de la portada fiel al portal, nomenclatura del PDF
+  `NombreCliente_IDInterno_Fecha` (D4) y la **variante `GET /v1/informes/solicitud/:nroSolicitud/pdf`**
+  (D3b). Validado en dev: D3b `/solicitud/9999/pdf`→`404` (query real a `Informes_Revision` OK), PDF→`200`
+  con filename D4. **Pendiente:** sembrar `consumer_caps` (D6, 60/120/100) — ver §6.
 
 ---
 
@@ -108,7 +112,7 @@ pnpm -r run test
 pnpm run lint
 ```
 
-Estado verificado en verde: `tsc -b`, **25 tests** (vitest), eslint, bundle esbuild. El secret-scan se valida en CI (requiere Docker + historia completa).
+Estado verificado en verde: `tsc -b`, **152 tests** (vitest), eslint, bundle esbuild. El secret-scan se valida en CI (requiere Docker + historia completa).
 
 ---
 
@@ -270,6 +274,7 @@ Si health no responde 200, el deploy no levantó — no seguir con el resto.
 | `/v1/opportunity-contact` | POST | `opportunities:create` | `X-Api-Key: …`, `Content-Type: application/json` | `200/201` en éxito; mismo `NroSolicitud` + payload distinto → `409 IDEMPOTENCY_CONFLICT` |
 | `/v1/informes` | GET | `reports:read` | `X-Api-Key: …` | ⛔ descartado (ADR-0015): ML es push; ruta solo en mock |
 | `/v1/informes/:id/pdf` | GET | `reports:pdf` | `X-Api-Key: …` | `200` stream PDF; sin PDF → `404 PDF_NOT_AVAILABLE` |
+| `/v1/informes/solicitud/:nroSolicitud/pdf` | GET | `reports:pdf` | `X-Api-Key: …` | `200` stream PDF (resuelve NroSolicitud→Análisis vía CRM `Informes_Revision`); no resuelve → `404 NOT_FOUND` |
 
 ```bash
 # POST opportunity-contact (payload AutoCheck; idempotencia por NroSolicitud del body)
