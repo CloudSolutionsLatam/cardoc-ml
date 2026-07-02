@@ -42,6 +42,9 @@ export interface CreatorConnection {
   reportDetailUrl: string;
   /** "publickey" (default; la key va en la URL) | "oauth" (Authorization con el self-client del CRM). */
   authMode?: "publickey" | "oauth";
+  /** Acuña el `token` de sesión que la Custom API exige (mini-JWT AES; ver creator-token.ts). Si se
+   *  provee, el fetcher lo agrega como query param `token`. Sin él, la función Deluge devuelve 9430. */
+  mintToken?: () => string;
   /** Access token OAuth (self-client — el MISMO gestor que el CRM). Solo se usa en `authMode: "oauth"`. */
   getAccessToken(): Promise<string>;
 }
@@ -61,6 +64,7 @@ export function createReportDetailFetcher(conn: CreatorConnection, fetchFn: Fetc
     }
     url.searchParams.set("id", id);
     url.searchParams.set("portalType", portalType);
+    if (conn.mintToken) url.searchParams.set("token", conn.mintToken()); // token de sesión (evita el 9430)
     const headers: Record<string, string> = { "Content-Type": "application/json" };
     if (conn.authMode === "oauth") {
       // OAuth2: mismo gestor de tokens que el CRM (self-client). Requiere la Custom API en modo OAuth.

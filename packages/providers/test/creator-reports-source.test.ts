@@ -166,6 +166,19 @@ describe("createReportDetailFetcher — manejo robusto del HTTP", () => {
     expect(authHeader).toBe("Zoho-oauthtoken TKN-999");
   });
 
+  it("mintToken presente → agrega el query param token", async () => {
+    let called = "";
+    const fetcher = createReportDetailFetcher(
+      { reportDetailUrl: "https://x/creator/custom/cardoc/API?publickey=pk", mintToken: () => "TKN-abc", getAccessToken: async () => "t" },
+      async (u) => {
+        called = String(u);
+        return fakeRes({ ok: true, status: 200, json: async () => ({ code: 3000, result: {} }) });
+      },
+    );
+    await fetcher("#R-1", "ml");
+    expect(called).toContain("token=TKN-abc");
+  });
+
   it("reportDetailUrl ausente/ inválida → UpstreamError (no URL crudo)", async () => {
     const fetcher = createReportDetailFetcher(
       { reportDetailUrl: "", getAccessToken: async () => "t" },

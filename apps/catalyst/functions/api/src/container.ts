@@ -26,6 +26,7 @@ import {
   type TokensRepository,
 } from "@cardoc/persistence";
 import {
+  createCreatorTokenSigner,
   createPublicImageFetcher,
   createReportDetailFetcher,
   MockCrmClient,
@@ -148,12 +149,19 @@ async function resolveZohoAccessToken(catalystApp: unknown): Promise<string> {
  */
 function resolveCreatorConnection(catalystApp: unknown): CreatorConnection {
   let tokenPromise: Promise<string> | undefined;
+  // Token de sesión (mini-JWT AES) que la Custom API exige — se acuña local con la key + client id.
+  // CREATOR_TOKEN_KEY es un secreto fuerte (acuña tokens): SOLO en Env Vars, nunca en el repo.
+  const tokenKey = process.env["CREATOR_TOKEN_KEY"];
+  const mintToken = tokenKey
+    ? createCreatorTokenSigner(tokenKey, process.env["CREATOR_TOKEN_CLIENT_ID"] || "cardoc")
+    : undefined;
   return {
     // Endpoint URL de la Custom API (con la public key embebida), copiado VERBATIM de la consola.
     // La key vive SOLO acá (Environment Variables), nunca en el repo.
     reportDetailUrl: process.env["CREATOR_REPORT_DETAIL_URL"] ?? "",
     // "publickey" (default) hoy; "oauth" a futuro (reconfigurar la Custom API + self-client del CRM).
     authMode: process.env["CREATOR_AUTH_MODE"] === "oauth" ? "oauth" : "publickey",
+    mintToken,
     // Mismo gestor de tokens que el CRM (self-client). Solo se usa en authMode "oauth".
     getAccessToken: () => (tokenPromise ??= resolveZohoAccessToken(catalystApp)),
   };
