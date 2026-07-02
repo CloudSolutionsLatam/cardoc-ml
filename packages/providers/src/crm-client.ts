@@ -46,6 +46,15 @@ export const ZOHO_CRM_FIELDS = {
     // Agenda (fase posterior): Inspector→Inspectores, Vehiculo→Products,
     // Fecha_y_hora_de_visita_programada, nota_agenda, Ciudad/Calle/N_mero/Estado.
   },
+  /**
+   * Informes Revisión — módulo del CRM que correlaciona el N.º de Solicitud externo con el
+   * Análisis (Creator). Lo consulta la variante del PDF por NroSolicitud (D3b, mail Cardoc 2026-07-02).
+   */
+  informesRevision: {
+    module: "Informes_Revision", //                 api_name del módulo (confirmar en discovery)
+    nroSolicitudExterno: "Nro_Solicitud_Externo", // ✅ confirmado (Nestor 2026-07-02): campo de búsqueda
+    analisisId: "Creator_Analisis_ID", //           ✅ confirmado (Nestor 2026-07-02): id del Análisis en Creator
+  },
 } as const;
 
 /**
@@ -102,6 +111,11 @@ export interface CrmClient {
   findContactByCedula(nroCedula: number, conn: CrmConnection): Promise<{ id: string } | null>;
   createContact(data: CrmContactData, conn: CrmConnection): Promise<CrmWriteResult>;
   createOpportunity(data: CrmOpportunityData, conn: CrmConnection): Promise<CrmWriteResult>;
+  /**
+   * Resuelve el id de Análisis (Creator) desde el N.º de Solicitud externo, buscando en el módulo
+   * Informes Revisión del CRM. Null si no existe. (Variante del PDF por NroSolicitud, D3b.)
+   */
+  findAnalisisIdByNroSolicitud(nroSolicitudExterno: string, conn: CrmConnection): Promise<string | null>;
 }
 
 /**
@@ -111,11 +125,21 @@ export interface CrmClient {
 export class MockCrmClient implements CrmClient {
   private readonly contactsByCedula = new Map<number, string>();
   private readonly dealsByExternalId = new Map<number, string>();
+  private readonly analisisByNroSolicitud = new Map<string, string>();
   private seq = 0;
+
+  /** Siembra la correlación NroSolicitud externo → id de Análisis (dev/test de la variante D3b). */
+  seedInformeRevision(nroSolicitudExterno: string, analisisId: string): void {
+    this.analisisByNroSolicitud.set(nroSolicitudExterno, analisisId);
+  }
 
   async findContactByCedula(nroCedula: number, _conn: CrmConnection): Promise<{ id: string } | null> {
     const id = this.contactsByCedula.get(nroCedula);
     return id ? { id } : null;
+  }
+
+  async findAnalisisIdByNroSolicitud(nroSolicitudExterno: string, _conn: CrmConnection): Promise<string | null> {
+    return this.analisisByNroSolicitud.get(nroSolicitudExterno) ?? null;
   }
 
   async createContact(data: CrmContactData, _conn: CrmConnection): Promise<CrmWriteResult> {
@@ -201,6 +225,18 @@ export class ZohoCrmClient implements CrmClient {
     return id ? { id } : null;
   }
 
+  async findAnalisisIdByNroSolicitud(nroSolicitudExterno: string, conn: CrmConnection): Promise<string | null> {
+    const ir = ZOHO_CRM_FIELDS.informesRevision;
+    if (!ir.analisisId) {
+      // Guard: el api_name del campo que referencia el Análisis aún no está confirmado (mail Cardoc / OQ).
+      // Sin él no se puede resolver el id — se corta acá en vez de armar una query rota.
+      throw new Error("Informes_Revision.analisisId: api_name pendiente de confirmar (variante PDF por NroSolicitud)");
+    }
+    const record = await this.searchFirstRecord(ir.module, `(${ir.nroSolicitudExterno}:equals:${nroSolicitudExterno})`, conn);
+    const raw = record?.[ir.analisisId];
+    return raw != null && String(raw).length > 0 ? String(raw) : null;
+  }
+
   async createContact(data: CrmContactData, conn: CrmConnection): Promise<CrmWriteResult> {
     const f = ZOHO_CRM_FIELDS.contact;
     const record: Record<string, unknown> = {
@@ -236,6 +272,16 @@ export class ZohoCrmClient implements CrmClient {
     const json = await parseCrmJson<ZohoSearchResponse>(res);
     const id = json.data?.[0]?.id;
     return id ? String(id) : null;
+  }
+
+  /** GET /<module>/search?criteria=... → primer registro completo (204 → null). */
+  private async searchFirstRecord(module: string, criteria: string, conn: CrmConnection): Promise<Record<string, unknown> | null> {
+    const url = `${crmBase(conn)}/${module}/search?criteria=${encodeURIComponent(criteria)}`;
+    const res = await this.request(url, { method: "GET" }, conn);
+    if (res.status === 204) return null;
+    if (!res.ok) throw new UpstreamError("crm", res.status, `${module}/search HTTP ${res.status}`);
+    const json = await parseCrmJson<{ data?: Array<Record<string, unknown>> }>(res);
+    return json.data?.[0] ?? null;
   }
 
   private async createRecord(

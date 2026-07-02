@@ -98,6 +98,8 @@ if (!useDatastore) {
     name: "Automotora Dev",
     status: "active",
   });
+  // Correlación demo para la variante del PDF por NroSolicitud (D3b): "1001" → informe de muestra.
+  memCrm.seedInformeRevision("1001", `${DEV_ACCOUNT}-INF-001`);
 }
 
 const ZOHO_CONNECTOR = process.env["ZOHO_CRM_CONNECTOR_NAME"] ?? "zoho_crm_conn";

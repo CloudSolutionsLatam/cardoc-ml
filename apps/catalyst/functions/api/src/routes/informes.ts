@@ -4,11 +4,28 @@
  *
  * El `accountId` lo agrega el backend desde el token (tenancy); el consumidor nunca lo elige.
  */
-import type { RequestHandler } from "express";
+import type { NextFunction, RequestHandler, Response } from "express";
 import { listInformesQuerySchema } from "@cardoc/domain";
-import { listInformes, streamReportPdf } from "@cardoc/application";
+import { listInformes, streamReportPdf, streamReportPdfByNroSolicitud } from "@cardoc/application";
+import type { ReportPdf } from "@cardoc/providers";
 import type { AuthedRequest } from "../middleware/auth";
 import { ApiError, asyncHandler } from "../middleware/errors";
+
+/** Setea headers (sin URL pública ni ruta interna) y pipea el PDF; 502 si falla antes del 1er byte. */
+function pipePdfResponse(res: Response, next: NextFunction, pdf: ReportPdf): void {
+  res.setHeader("Content-Type", pdf.contentType);
+  res.setHeader("Content-Disposition", `attachment; filename="${pdf.filename}"`);
+  res.setHeader("Cache-Control", "no-store");
+  pdf.stream.on("error", (err: Error) => {
+    // Si aún no se enviaron bytes, se traduce a 502; si ya empezó, se corta la conexión.
+    if (!res.headersSent) {
+      next(new ApiError(502, "UPSTREAM_ERROR", "fallo al transmitir el PDF", { upstream: "workdrive" }));
+    } else {
+      res.destroy(err);
+    }
+  });
+  pdf.stream.pipe(res);
+}
 
 export const listInformesHandler: RequestHandler = asyncHandler<AuthedRequest>(async (req, res): Promise<void> => {
   // `.strict()` → un parámetro fuera de la allowlist (p.ej. un filtro de Cuenta) falla.
@@ -39,19 +56,24 @@ export const streamPdfHandler: RequestHandler = asyncHandler<AuthedRequest>(asyn
   const id = req.params["id"] ?? "";
   // openPdf valida existencia + tenancy ANTES de devolver el stream (404 NOT_FOUND si ajeno).
   const pdf = await streamReportPdf(accountId, id, { reports: container.reports });
+  pipePdfResponse(res, next, pdf);
+});
 
-  // Headers ANTES del primer byte. Sin URL pública, sin redirect 302, sin ubicación interna.
-  res.setHeader("Content-Type", pdf.contentType);
-  res.setHeader("Content-Disposition", `attachment; filename="${pdf.filename}"`);
-  res.setHeader("Cache-Control", "no-store");
-
-  pdf.stream.on("error", (err: Error) => {
-    // Si aún no se enviaron bytes, se traduce a 502; si ya empezó, se corta la conexión.
-    if (!res.headersSent) {
-      next(new ApiError(502, "UPSTREAM_ERROR", "fallo al transmitir el PDF", { upstream: "workdrive" }));
-    } else {
-      res.destroy(err);
-    }
+/**
+ * GET /v1/informes/solicitud/:nroSolicitud/pdf — variante que recibe el N.º de Solicitud externo
+ * (no el id interno de Creator): resuelve el Análisis vía CRM (Informes Revisión) y streamea el PDF.
+ */
+export const streamPdfBySolicitudHandler: RequestHandler = asyncHandler<AuthedRequest>(async (req, res, next): Promise<void> => {
+  const container = req.container;
+  const accountId = req.accountId;
+  if (!container || !accountId) {
+    throw new ApiError(500, "INTERNAL_ERROR", "container/cuenta no resueltos");
+  }
+  const nroSolicitud = req.params["nroSolicitud"] ?? "";
+  const pdf = await streamReportPdfByNroSolicitud(accountId, nroSolicitud, {
+    crm: container.crm,
+    connection: container.connection,
+    reports: container.reports,
   });
-  pdf.stream.pipe(res);
+  pipePdfResponse(res, next, pdf);
 });

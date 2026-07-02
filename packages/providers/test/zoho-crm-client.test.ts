@@ -150,3 +150,24 @@ describe("composeNotaAgenda", () => {
     expect(composeNotaAgenda({ nroSolicitud: 1, contactId: "c", stage: "X" })).toBe("");
   });
 });
+
+describe("ZohoCrmClient.findAnalisisIdByNroSolicitud", () => {
+  it("busca Informes_Revision por Nro_Solicitud_Externo y devuelve el Creator_Analisis_ID", async () => {
+    const { fetchFn, calls } = fake(() => json({ data: [{ id: "IR1", Creator_Analisis_ID: "4837888000004307360" }] }));
+    const out = await new ZohoCrmClient({ fetchFn }).findAnalisisIdByNroSolicitud("SOL-123", conn);
+    expect(out).toBe("4837888000004307360");
+    expect(calls[0]?.url).toContain("/crm/v2/Informes_Revision/search?criteria=");
+    expect(decodeURIComponent(calls[0]!.url)).toContain("(Nro_Solicitud_Externo:equals:SOL-123)");
+    expect(calls[0]?.init?.headers?.["Authorization"]).toBe("Zoho-oauthtoken tok-123");
+  });
+
+  it("204 (sin coincidencias) → null", async () => {
+    const { fetchFn } = fake(() => new Response(null, { status: 204 }));
+    expect(await new ZohoCrmClient({ fetchFn }).findAnalisisIdByNroSolicitud("nope", conn)).toBeNull();
+  });
+
+  it("registro sin Creator_Analisis_ID → null", async () => {
+    const { fetchFn } = fake(() => json({ data: [{ id: "IR1" }] }));
+    expect(await new ZohoCrmClient({ fetchFn }).findAnalisisIdByNroSolicitud("SOL-9", conn)).toBeNull();
+  });
+});

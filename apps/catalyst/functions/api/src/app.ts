@@ -21,7 +21,7 @@ import { auditOnFinish } from "./middleware/audit";
 import { cap } from "./middleware/cap";
 import { errorMiddleware } from "./middleware/errors";
 import { opportunityContactHandler } from "./routes/opportunity-contact";
-import { listInformesHandler, streamPdfHandler } from "./routes/informes";
+import { listInformesHandler, streamPdfHandler, streamPdfBySolicitudHandler } from "./routes/informes";
 import { dealEstadoHandler } from "./routes/internal";
 
 const app: express.Express = express();
@@ -59,6 +59,16 @@ app.get(
   requireScope("reports:pdf"),
   cap("informes-pdf"),
   streamPdfHandler,
+);
+
+// Variante por N.º de Solicitud externo (4 segmentos → no colisiona con :id/pdf, que son 3).
+// Resuelve el Análisis vía CRM (Informes Revisión) en lugar de recibir el id interno de Creator.
+app.get(
+  "/v1/informes/solicitud/:nroSolicitud/pdf",
+  ...authed,
+  requireScope("reports:pdf"),
+  cap("informes-pdf"),
+  streamPdfBySolicitudHandler,
 );
 
 // Ruta interna (CRM workflow → Catalyst): notifica a ML el cambio de estado del Deal.
