@@ -65,7 +65,7 @@ Cardoc respondió las 7 decisiones pendientes del §10 del CR-003. Estado de cie
 
 | # | Decisión | Definición Cardoc | Estado en código | Acción |
 |---|----------|-------------------|------------------|--------|
-| D1 | Módulo + "Portal solicitante" | Mantener Informes de Revisión + agregar campo técnico "Portal solicitante" | Existe en LECTURA (`portalType`); falta el WRITE | Crear campo `Portal_Solicitante` en consola (OQ-P8) + escribirlo server-side con `PORTAL_TYPE` |
+| D1 | "Portal solicitante" | Identificar el origen de la operación | ✅ **Sin acción de cardoc** (Nestor 2026-07-02) | La Oportunidad ya nace en el pipeline ML (origen implícito); el campo "portal" se completa **downstream** (`Informes_Revision` al cierre + informe Creator). cardoc consume portal en la lectura (`portalType=ml`) |
 | D2 | Dedup Contactos | Sugieren **teléfono** | ⚠️ **Discrepancia** (ver abajo) | **Mantener NroCedula** (ADR-0003); **escalar a PM** |
 | D3a | Stage Oportunidad | "Nueva Solicitud" (funnel B2B) | ✅ ya implementado (OQ-N4) | Constancia |
 | D3b | Gating de exposición | Exponer solo si Oportunidad=Completado **y** Informe=Finalizado | Gating **descartado** (sin Analisis no hay datos) | ✅ **Implementado**: variante `GET /v1/informes/solicitud/:nroSolicitud/pdf` busca en `Informes_Revision` por `Nro_Solicitud_Externo` → `Creator_Analisis_ID` → PDF (Mock + Zoho real + tests). api_name confirmados por Nestor 2026-07-02 |
@@ -88,5 +88,5 @@ técnico a favor de la cédula: es numérica, estable y única; el teléfono es 
 
 - ~~**D3b:** api_name del módulo `Informes_Revision`~~ ✅ **RESUELTO (Nestor 2026-07-02):** módulo `Informes_Revision`, búsqueda por `Nro_Solicitud_Externo`, id de Análisis en `Creator_Analisis_ID`. Variante implementada.
 - **D4:** ¿IDInterno del filename = `reportCode` ("#R-12345") o el `number` del CRM ("INFREV-xxxx")? (hoy el detalle no trae `number`).
-- **D1:** confirmar el api_name definitivo del campo "Portal solicitante" al crearlo en consola.
+- ~~**D1:** api_name del campo "Portal solicitante"~~ ✅ **RESUELTO (Nestor 2026-07-02):** sin acción de cardoc — la Oportunidad ya nace en el pipeline ML; el campo se completa downstream (`Informes_Revision` al cierre + informe Creator).
 - **D6:** ¿día/semana explícitos por endpoint, o se dejan en defaults como guardrail?
