@@ -15,7 +15,7 @@
 //
 // Env vars (NUNCA al repo):
 //   CATALYST_CLIENT_ID / CATALYST_CLIENT_SECRET  - self-client (fallback a ZOHO_CLIENT_ID/SECRET).
-//   CATALYST_REFRESH_TOKEN                        - refresh token con scope ZohoCatalyst.tables.ALL.
+//   CATALYST_REFRESH_TOKEN                        - refresh token con scope ZohoCatalyst.tables.rows.CREATE/READ + tables.READ.
 //   CATALYST_ACCESS_TOKEN                         - (alternativa) access token de corta vida.
 //   CATALYST_PROJECT_ID    (default 57305000000083001)  - proyecto ML.
 //   CATALYST_PROJECT_KEY   - ZAID del proyecto (Consola -> Project Settings). Obligatorio.
@@ -114,7 +114,7 @@ async function main() {
 main().catch((e) => {
   console.error("\nFallo el seed:", e?.message ?? e);
   if (/invalid|token|credential|scope/i.test(String(e?.message))) {
-    console.error("  Revisa el refresh token (scope ZohoCatalyst.tables.ALL), el CATALYST_PROJECT_KEY (ZAID) y el DC del self-client.");
+    console.error("  Revisa el refresh token (scope ZohoCatalyst.tables.rows.CREATE/READ + tables.READ), el CATALYST_PROJECT_KEY (ZAID) y el DC del self-client.");
   }
   process.exit(1);
 });
