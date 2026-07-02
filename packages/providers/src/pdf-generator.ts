@@ -2,22 +2,40 @@
  * Puerto `PdfGenerator` + implementación con **pdf-lib** (generación en Catalyst).
  *
  * Reconstrucción FIEL (no pixel-1:1) del informe del portal de clientes —
- * `docs/reference/pdf-backend/planning.md` §5.5. cardoc-ml es el **generador único** del PDF
- * (reemplaza el `window.print()` del portal). Motor: pdf-lib (ADR-0012), sin navegador.
+ * `docs/reference/pdf-backend/planning.md` §5.5 (plantilla + CSS, fuente de verdad visual) y su
+ * Anexo A (logo). cardoc-ml es el **generador único** del PDF (reemplaza el `window.print()` del
+ * portal). Motor: pdf-lib (ADR-0012), sin navegador.
  *
  * pdf-lib dibuja por coordenadas (no hay CSS/flexbox/paginación automática), así que acá viven
- * un cursor con paginación (`Layout`), wrapping de texto y tarjetas medidas. Las fotos se embeben
- * vía un `ImageFetcher` inyectable (lo provee el adapter Creator con auth de WorkDrive); sin
- * fetcher se dibuja un placeholder con el conteo (no hay red por defecto).
+ * un cursor con paginación (`Layout`), wrapping de texto y tarjetas medidas. El CSS del portal
+ * está a escala 794px = A4; acá los tamaños van directo en puntos (~px × 0.75).
+ *
+ * Deltas intencionales respecto del portal (documentados): (1) las fotos son EVIDENCIA → se
+ * dibujan GRANDES ~2/página en su calidad ORIGINAL (el portal las mete a 2/fila chicas); (2) se
+ * agrega un chip de estado por color en cada componente (el portal solo usa el filete lateral),
+ * útil para impresión B/N. Todo lo demás sigue la maqueta.
+ *
+ * Las fotos se embeben vía un `ImageFetcher` inyectable (lo provee el adapter Creator con auth de
+ * WorkDrive); sin fetcher se anota el conteo como nota (no hay red por defecto).
  */
 import type { EstadoComponente, InformeReport, ReportDetalle } from "@cardoc/domain";
-import { PDFDocument, StandardFonts, rgb, type Color, type PDFFont, type PDFImage, type PDFPage } from "pdf-lib";
+import {
+  PDFDocument,
+  StandardFonts,
+  LineCapStyle,
+  rgb,
+  type Color,
+  type PDFFont,
+  type PDFImage,
+  type PDFPage,
+} from "pdf-lib";
+import { ML_LOGO_PNG_BASE64 } from "./ml-logo";
 
 /** Trae los bytes de una imagen (WorkDrive) o null si no se pudo. Lo inyecta el adapter Creator. */
 export type ImageFetcher = (url: string) => Promise<Uint8Array | null>;
 
 export interface PdfGeneratorOptions {
-  /** Fetcher de imágenes (WorkDrive). Sin él, las fotos se dibujan como placeholder. */
+  /** Fetcher de imágenes (WorkDrive). Sin él, las fotos se anotan como nota (conteo). */
   fetchImage?: ImageFetcher;
   /** Timestamp "Generado:" (el cliente lo estampa). Inyectable para tests deterministas. */
   generatedAt?: string;
@@ -27,45 +45,98 @@ export interface PdfGenerator {
   generate(informe: InformeReport): Promise<Uint8Array>;
 }
 
-// ── Geometría y paleta (de planning.md §5.5) ───────────────────────────────────
+// ── Geometría (de planning.md §5.5: 794px = A4, padding lateral 48px) ───────────
 const A4 = { w: 595.28, h: 841.89 } as const;
-const MARGIN = 42;
+const MARGIN = 36; // 48px × 0.75 → margen/padding lateral del documento
 const CONTENT_W = A4.w - 2 * MARGIN;
-const BOTTOM = 54; // margen inferior (deja lugar para el pie)
-const MAX_PHOTOS = 6; // tope de fotos por componente
+const BOTTOM = 48; // margen inferior
+const MAX_PHOTOS = 6; // tope de fotos por componente (portal: .slice(0,6))
 const IMAGE_CONCURRENCY = 8; // descargas de fotos en paralelo (tope; la red es el cuello de botella)
 // Las fotos son EVIDENCIA de inspección (motores, detalles finos): se embeben en su calidad/resolución
 // ORIGINAL, sin recomprimir (bajar calidad arruinaría el detalle; las fuentes ya son ~1080px). El peso
 // del PDF (302 fotos → ~126 MB) es inherente; la usabilidad se resuelve con caché/portal, no degradando.
 
-const INK = rgb(0.17, 0.17, 0.17);
-const MUTED = rgb(0.6, 0.6, 0.62);
-const FAINT = rgb(0.62, 0.63, 0.65);
-const BRAND = rgb(0.96, 0.77, 0.0); // #F5C400
-const RULE = rgb(0.9, 0.91, 0.93);
-const CARD_BORDER = rgb(0.9, 0.91, 0.93);
+// ── Paleta de marca Portal ML (hex verbatim del CSS de §5.5) ────────────────────
+const INK = rgb(0.173, 0.173, 0.173); // #2c2c2c — texto base / valores
+const SECTION_INK = rgb(0.102, 0.102, 0.102); // #1a1a1a — títulos de sección e índice
+const LABEL = rgb(0.6, 0.6, 0.6); // #999 — labels de campo
+const DATE = rgb(0.533, 0.533, 0.533); // #888 — fecha de portada
+const DESC = rgb(0.267, 0.267, 0.267); // #444 — cuerpo de componente
+const TOC_DESC = rgb(0.4, 0.4, 0.4); // #666 — descripciones del índice / año
+const LEGAL_INK = rgb(0.604, 0.627, 0.651); // #9aa0a6 — descargo legal
+const FOOTER_MAIN = rgb(0.667, 0.667, 0.667); // #aaa
+const FOOTER_FAINT = rgb(0.733, 0.733, 0.733); // #bbb
+const BRAND = rgb(0.961, 0.769, 0.0); // #F5C400 — amarillo de marca
+const BORDER = rgb(0.898, 0.906, 0.922); // #e5e7eb — bordes de tarjeta
+const FIELD_RULE = rgb(0.933, 0.941, 0.949); // #eef0f2 — filete entre campos
+const WHITE = rgb(1, 1, 1);
+const RECO_BORDER = rgb(0.965, 0.659, 0.447); // #F6A872
+const RECO_BG = rgb(1, 0.98, 0.961); // #fffaf5
+const SCORE_BG = rgb(1, 0.992, 0.949); // #fffdf2
+const SUMMARY_BG = rgb(0.976, 0.976, 0.976); // #f9f9f9
+const SUMMARY_BORDER = rgb(0.82, 0.835, 0.859); // #d1d5db
+
 const ESTADO_COLOR: Record<EstadoComponente, Color> = {
   aprobado: rgb(0.086, 0.639, 0.29), // #16a34a
   observacion: rgb(0.851, 0.467, 0.024), // #d97706
   critico: rgb(0.863, 0.149, 0.149), // #dc2626
 };
+const ESTADO_LABEL: Record<EstadoComponente, string> = {
+  aprobado: "Aprobado",
+  observacion: "Observación",
+  critico: "Crítico",
+};
 
-/** ÍNDICE FIJO de la portada (verbatim planning.md §5.5 — NO deriva de los datos). */
+/** ÍNDICE FIJO de la portada (verbatim planning.md §5.5 — NO deriva de los datos, pedido de ML). */
 const INDICE_PORTADA: Array<{ titulo: string; descripcion: string }> = [
-  { titulo: "Resumen, Recomendaciones y Puntaje", descripcion: "Comentarios generales del técnico, recomendaciones y un puntaje general del estado del vehículo." },
-  { titulo: "Chasis", descripcion: "Estructura principal del vehículo: deformaciones, daños o reparaciones que comprometan la seguridad." },
-  { titulo: "Carrocería", descripcion: "Paneles y espesor de pintura para determinar si conservan el estado original de fábrica." },
-  { titulo: "Interior", descripcion: "Estado y funcionamiento de los componentes del interior del vehículo." },
-  { titulo: "Mecánica", descripcion: "Componentes mecánicos: estado, posibles fallas o desgastes." },
-  { titulo: "Electrónica", descripcion: "Alertas e indicadores y escaneo con equipos de diagnóstico." },
-  { titulo: "Prueba Dinámica", descripcion: "Prueba de conducción para evaluar el comportamiento real del vehículo." },
-  { titulo: "PRO", descripcion: "Componentes del PRO, con un enfoque ampliado y más información." },
+  {
+    titulo: "Resumen, Recomendaciones y Puntaje",
+    descripcion:
+      "En esta sección podrá visualizar los comentarios generales del técnico, junto con unas recomendaciones para seguir con el funcionamiento del vehículo y un puntaje general del estado del mismo.",
+  },
+  {
+    titulo: "Chasis",
+    descripcion:
+      "El chasis es la estructura principal del vehículo. Evaluamos que no presente deformaciones, daños o reparaciones que puedan comprometer la seguridad de los ocupantes.",
+  },
+  {
+    titulo: "Carrocería",
+    descripcion:
+      "Revisamos los paneles de carrocería y medimos el espesor de pintura para determinar si las piezas conservan su estado original de fábrica o si han sido reparadas y/o repintadas.",
+  },
+  {
+    titulo: "Interior",
+    descripcion:
+      "Evaluamos el estado y funcionamiento de los componentes del interior del vehículo, verificando su nivel de conservación y operatividad.",
+  },
+  {
+    titulo: "Mecánica",
+    descripcion:
+      "Evaluamos los componentes que conforman la mecánica del vehículo, verificando su estado y detectando posibles fallas o desgastes.",
+  },
+  {
+    titulo: "Electrónica",
+    descripcion:
+      "Analizamos las alertas e indicadores presentes en el vehículo y realizamos un escaneo con equipos de diagnóstico para detectar posibles fallas electrónicas.",
+  },
+  {
+    titulo: "Prueba Dinámica",
+    descripcion:
+      "Realizamos una prueba de conducción para evaluar el comportamiento real del vehículo y detectar posibles fallas o anomalías en funcionamiento que no pueden apreciarse con el vehículo detenido.",
+  },
+  {
+    titulo: "PRO",
+    descripcion:
+      "En esta sección se agregan los componentes del PRO, que le dan un enfoque aún más ampliado y con más información al resto del informe.",
+  },
 ];
 
+/** Descargo legal de ML al pie de la portada (verbatim planning.md §5.5). */
 const LEGAL =
   "El servicio se limita a la revisión, análisis técnico e informe sobre el estado del vehículo. El mismo no constituye una garantía. " +
   "ML se deslinda de toda responsabilidad ante cualquier tipo de anomalía o desperfecto no detectado, como también por vicios ocultos. " +
-  "ML no será responsable ante ninguna acción u omisión de buena fe o con culpa simple, obligándose únicamente a la realización del análisis técnico e informe contratado.";
+  "ML no será responsable ante ninguna acción u omisión de buena fe o con culpa simple, ni estará sujeto a ningún tipo de responsabilidad implícita, " +
+  "obligándose únicamente a la realización del análisis técnico e informe contratado.";
 
 /**
  * Tipografía Unicode (comillas/guiones/ellipsis/bullet) → ASCII. WinAnsi la soporta vía CP1252,
@@ -139,6 +210,22 @@ export function capLines(lines: string[], max: number): string[] {
   return kept;
 }
 
+/**
+ * Path SVG (coords y-down, origen en la esquina superior-izquierda) de un rectángulo con esquinas
+ * redondeadas de radio `r`. Reproduce el `border-radius` de las tarjetas del portal (§5.5), que
+ * `drawRectangle` de pdf-lib no soporta. Se dibuja con `page.drawSvgPath` (que ancla en (x,y) y
+ * escala y por -1, así que positivo-y baja en la página).
+ */
+export function roundedRectPath(w: number, h: number, r: number): string {
+  const rr = Math.max(0, Math.min(r, w / 2, h / 2));
+  return [
+    `M ${rr} 0`, `L ${w - rr} 0`, `Q ${w} 0 ${w} ${rr}`,
+    `L ${w} ${h - rr}`, `Q ${w} ${h} ${w - rr} ${h}`,
+    `L ${rr} ${h}`, `Q 0 ${h} 0 ${h - rr}`,
+    `L 0 ${rr}`, `Q 0 0 ${rr} 0`, "Z",
+  ].join(" ");
+}
+
 /** Cursor de layout con paginación: dibuja de arriba hacia abajo y agrega páginas al llenarse. */
 class Layout {
   page: PDFPage;
@@ -168,6 +255,11 @@ class Layout {
       this.page.drawText(safe.replace(/[^\x20-\x7e]/g, "?"), { x, y, size, font, color });
     }
   }
+  /** Dibuja texto centrado en `[x0, x0+width]` (una sola línea). */
+  textCentered(t: string, x0: number, width: number, y: number, size: number, font: PDFFont, color: Color): void {
+    const tw = font.widthOfTextAtSize(winAnsiSafe(t), size);
+    this.text(t, x0 + (width - tw) / 2, y, size, font, color);
+  }
   /** Dibuja un párrafo wrappeado desde el cursor; avanza `y`. */
   paragraph(t: string, size: number, font: PDFFont, color: Color, lineGap = 4, x = MARGIN, width = CONTENT_W): void {
     for (const line of wrapText(t, font, size, width)) {
@@ -176,13 +268,18 @@ class Layout {
       this.y -= size + lineGap;
     }
   }
+  /** Rectángulo con esquinas redondeadas (relleno y/o borde), anclado por su esquina superior-izquierda `(x, top)`. */
+  roundedRect(
+    x: number,
+    top: number,
+    w: number,
+    h: number,
+    r: number,
+    opts: { color?: Color; borderColor?: Color; borderWidth?: number },
+  ): void {
+    this.page.drawSvgPath(roundedRectPath(w, h, r), { x, y: top, ...opts });
+  }
 }
-
-const ESTADO_LABEL: Record<EstadoComponente, string> = {
-  aprobado: "Aprobado",
-  observacion: "Observación",
-  critico: "Crítico",
-};
 
 export class PdfLibReportGenerator implements PdfGenerator {
   constructor(private readonly opts: PdfGeneratorOptions = {}) {}
@@ -194,12 +291,19 @@ export class PdfLibReportGenerator implements PdfGenerator {
     doc.setCreator("cardoc (AutoCheck)");
     const reg = await doc.embedFont(StandardFonts.Helvetica);
     const bold = await doc.embedFont(StandardFonts.HelveticaBold);
+    // Logo de marca Portal ML (Anexo A). Si el embed falla, la portada cae a un wordmark de texto.
+    let logo: PDFImage | undefined;
+    try {
+      logo = await doc.embedPng(ML_LOGO_PNG_BASE64);
+    } catch {
+      logo = undefined;
+    }
     const L = new Layout(doc, reg, bold);
     const generadoEn = this.opts.generatedAt ?? "";
 
-    this.cover(L, informe, generadoEn);
+    this.cover(L, informe, generadoEn, logo);
     if (informe.resumenTranscripcion) this.summaryBlock(L, "Resumen del Técnico", informe.resumenTranscripcion);
-    if (informe.recomendaciones) this.summaryBlock(L, "Recomendaciones del Inspector", informe.recomendaciones);
+    if (informe.recomendaciones) this.summaryBlock(L, "Recomendaciones del Inspector", informe.recomendaciones, "reco");
     if (informe.score != null) this.score(L, informe.score, informe.score_comentario);
 
     // Pre-descarga TODAS las fotos en PARALELO antes de renderizar (evita el fetch secuencial de a una).
@@ -216,105 +320,201 @@ export class PdfLibReportGenerator implements PdfGenerator {
   }
 
   // ── Portada ──
-  private cover(L: Layout, informe: InformeReport, generadoEn: string): void {
-    L.text("AutoCheck", MARGIN, L.y - 18, 22, L.bold, rgb(0.15, 0.39, 0.92));
-    L.text("Informe de Revisión de Vehículo", MARGIN, L.y - 34, 11, L.reg, MUTED);
-    const codeText = winAnsiSafe(informe.reportCode || "—");
-    L.text(codeText, A4.w - MARGIN - L.bold.widthOfTextAtSize(codeText, 13), L.y - 18, 13, L.bold, INK);
-    if (generadoEn) {
-      const g = winAnsiSafe(`Generado: ${generadoEn}`);
-      L.text(g, A4.w - MARGIN - L.reg.widthOfTextAtSize(g, 9), L.y - 32, 9, L.reg, MUTED);
+  private cover(L: Layout, informe: InformeReport, generadoEn: string, logo?: PDFImage): void {
+    // Cabecera: logo a la IZQUIERDA (height 56px→42pt, width auto), código/fecha CENTRADOS (§5.5).
+    const headerTop = L.y;
+    const logoH = 42;
+    if (logo) {
+      const { width, height } = logo.size();
+      const w = (logoH / height) * width;
+      L.page.drawImage(logo, { x: MARGIN, y: headerTop - logoH, width: w, height: logoH });
+    } else {
+      L.text("Portal ML", MARGIN, headerTop - 20, 18, L.bold, INK);
     }
-    L.y -= 46;
+    const code = winAnsiSafe(informe.reportCode || "—");
+    L.textCentered(code, MARGIN, CONTENT_W, headerTop - 16, 12, L.bold, INK);
+    if (generadoEn) {
+      L.textCentered(`Generado: ${generadoEn}`, MARGIN, CONTENT_W, headerTop - 30, 9, L.reg, DATE);
+    }
+    L.y = headerTop - logoH - 12;
+    // Filete amarillo de marca bajo la cabecera (border-bottom 3px #F5C400).
     L.page.drawRectangle({ x: MARGIN, y: L.y, width: CONTENT_W, height: 2.5, color: BRAND });
     L.y -= 22;
 
+    // Título del vehículo (26px/800) + año (18px/400, atenuado).
     const v = informe.vehiculo;
-    L.text(winAnsiSafe(`${v.marca} ${v.modelo} ${v.año}`.trim()), MARGIN, L.y - 18, 20, L.bold, INK);
-    L.y -= 34;
+    const name = winAnsiSafe(`${v.marca} ${v.modelo}`.trim());
+    L.text(name, MARGIN, L.y - 20, 20, L.bold, INK);
+    if (v.año) {
+      const nameW = L.bold.widthOfTextAtSize(name, 20);
+      L.text(winAnsiSafe(String(v.año)), MARGIN + nameW + 7, L.y - 18, 13, L.reg, TOC_DESC);
+    }
+    L.y -= 36;
 
-    this.card(L, "Datos del Vehículo", [
-      ["Matrícula", v.placa || "—"],
-      ["Kilometraje", v.kilometraje || "—"],
-      ["Motor", v.motor || "—"],
-      ["Transmisión", v.transmision || "—"],
+    this.coverCard(L, "Datos del Vehículo", [
+      { label: "Matrícula", value: v.placa },
+      { label: "Kilometraje", value: v.kilometraje },
+      { label: "Motor", value: v.motor },
+      { label: "Transmisión", value: v.transmision },
     ]);
-    this.card(L, "Cliente", [
-      ["Nombre", informe.cliente.nombre || "—"],
-      ["Teléfono", informe.cliente.telefono || "—"],
+    this.coverCard(L, "Cliente", [
+      { label: "Nombre", value: informe.cliente.nombre, wide: true },
+      { label: "Teléfono", value: informe.cliente.telefono },
     ]);
-    this.card(L, "Inspección", [
-      ["Inspector", informe.inspector.nombre || "—"],
-      ["Agencia", informe.inspector.cargo || "—"],
-      ["Fecha inspección", informe.fechaInspeccion || "—"],
+    this.coverCard(L, "Inspección", [
+      { label: "Inspector", value: informe.inspector.nombre },
+      { label: "Agencia", value: informe.inspector.cargo },
+      { label: "Fecha inspección", value: informe.fechaInspeccion },
     ]);
 
     this.indice(L);
 
+    // Descargo legal (border-top #eef0f2 + texto 9px #9aa0a6).
     L.y -= 6;
-    L.page.drawLine({ start: { x: MARGIN, y: L.y }, end: { x: A4.w - MARGIN, y: L.y }, thickness: 0.6, color: RULE });
+    L.ensure(14);
+    L.page.drawLine({ start: { x: MARGIN, y: L.y }, end: { x: A4.w - MARGIN, y: L.y }, thickness: 0.8, color: FIELD_RULE });
     L.y -= 10;
-    L.paragraph(LEGAL, 7.5, L.reg, FAINT, 3);
+    L.paragraph(LEGAL, 7, L.reg, LEGAL_INK, 3);
   }
 
-  /** Tarjeta con filas label/valor (una fila por par; valor truncado al ancho). */
-  private card(L: Layout, title: string, rows: Array<[string, string]>): void {
-    const pad = 12;
-    const rowH = 26;
-    const h = 26 + rows.length * rowH + pad;
-    L.ensure(h + 12);
+  /** Ícono check-circle de marca (ring amarillo + tilde), reproducido del SVG de §5.5. */
+  private checkIcon(L: Layout, cx: number, cy: number, size: number): void {
+    L.page.drawCircle({ x: cx, y: cy, size: (size / 2) * 0.9, borderColor: BRAND, borderWidth: 1.1 });
+    // Path del portal `M6 10.5 l2.5 2.5 L14 7.3` en viewBox 20 (y-down) → mapeado a PDF (y-up).
+    const s = size / 20;
+    const pt = (sx: number, sy: number) => ({ x: cx + (sx - 10) * s, y: cy - (sy - 10) * s });
+    const p1 = pt(6, 10.5);
+    const p2 = pt(8.5, 13);
+    const p3 = pt(14, 7.3);
+    L.page.drawLine({ start: p1, end: p2, thickness: 1.3, color: BRAND, lineCap: LineCapStyle.Round });
+    L.page.drawLine({ start: p2, end: p3, thickness: 1.3, color: BRAND, lineCap: LineCapStyle.Round });
+  }
+
+  /**
+   * Tarjeta de datos de portada (Vehículo / Cliente / Inspección): head con check-circle + título
+   * uppercase, y una FILA de campos en columnas separadas por filete vertical (como §5.5).
+   */
+  private coverCard(L: Layout, title: string, fields: Array<{ label: string; value: string; wide?: boolean }>): void {
+    const padX = 12;
+    const padTop = 11;
+    const padBot = 12;
+    const headH = 13; // línea del head (ícono + título)
+    const gapHeadFields = 9;
+    const labelSize = 7.5;
+    const valueSize = 10.5;
+    const fieldsH = labelSize + 3 + valueSize + 2; // label + gap + valor
+    const h = padTop + headH + gapHeadFields + fieldsH + padBot;
+    L.ensure(h + 10);
     const top = L.y;
-    L.page.drawRectangle({
-      x: MARGIN,
-      y: top - h,
-      width: CONTENT_W,
-      height: h,
-      borderColor: CARD_BORDER,
-      borderWidth: 1,
-      color: rgb(1, 1, 1),
+
+    L.roundedRect(MARGIN, top, CONTENT_W, h, 6, { color: WHITE, borderColor: BORDER, borderWidth: 1 });
+
+    // Head: ícono check + título (12px/800 uppercase).
+    const iconSize = 12;
+    this.checkIcon(L, MARGIN + padX + iconSize / 2, top - padTop - iconSize / 2, iconSize);
+    L.text(title.toUpperCase(), MARGIN + padX + iconSize + 7, top - padTop - iconSize + 2, 9, L.bold, INK);
+
+    // Fila de campos: ancho por peso flex (wide = 2, normal = 1), filete a la izquierda salvo el primero.
+    const rowTop = top - padTop - headH - gapHeadFields;
+    const innerW = CONTENT_W - 2 * padX;
+    const totalWeight = fields.reduce((s, f) => s + (f.wide ? 2 : 1), 0);
+    let fx = MARGIN + padX;
+    fields.forEach((f, i) => {
+      const w = innerW * ((f.wide ? 2 : 1) / totalWeight);
+      if (i > 0) {
+        L.page.drawLine({ start: { x: fx, y: rowTop }, end: { x: fx, y: rowTop - fieldsH }, thickness: 0.8, color: FIELD_RULE });
+      }
+      const cellPad = i > 0 ? 12 : 0;
+      const tx = fx + cellPad;
+      L.text(f.label.toUpperCase(), tx, rowTop - labelSize, labelSize, L.reg, LABEL);
+      const value = f.value || "—";
+      L.text(this.fit(value, L.bold, valueSize, w - cellPad - 4), tx, rowTop - labelSize - 3 - valueSize, valueSize, L.bold, INK);
+      fx += w;
     });
-    L.page.drawRectangle({ x: MARGIN, y: top - 22, width: 3, height: 10, color: BRAND });
-    L.text(title.toUpperCase(), MARGIN + pad, top - 20, 10, L.bold, INK);
-    let ry = top - 34;
-    for (const [label, value] of rows) {
-      L.text(label.toUpperCase(), MARGIN + pad, ry, 7.5, L.bold, MUTED);
-      const maxW = CONTENT_W - 2 * pad;
-      L.text(this.fit(value, L.reg, 11, maxW), MARGIN + pad, ry - 12, 11, L.reg, INK);
-      ry -= rowH;
-    }
-    L.y = top - h - 12;
+
+    L.y = top - h - 10;
   }
 
+  /** ÍNDICE fijo, a 2 COLUMNAS con orden vertical (mitad izquierda / mitad derecha), como §5.5. */
   private indice(L: Layout): void {
-    L.ensure(30);
-    L.page.drawRectangle({ x: MARGIN, y: L.y - 18, width: CONTENT_W, height: 18, color: BRAND });
-    L.text("ÍNDICE", MARGIN + 10, L.y - 14, 11, L.bold, rgb(0.1, 0.1, 0.1));
-    L.y -= 30;
-    // Una columna (fiel al contenido; el portal usa 2 col, acá priorizamos legibilidad + paginación).
-    INDICE_PORTADA.forEach((it, i) => {
-      L.ensure(30);
-      const n = `${i + 1}`;
-      L.page.drawCircle({ x: MARGIN + 8, y: L.y - 6, size: 8, color: BRAND });
-      L.text(n, MARGIN + 8 - L.bold.widthOfTextAtSize(n, 8) / 2, L.y - 9, 8, L.bold, rgb(0.1, 0.1, 0.1));
-      L.text(winAnsiSafe(it.titulo), MARGIN + 24, L.y - 9, 10.5, L.bold, INK);
-      L.y -= 15;
-      L.paragraph(it.descripcion, 8, L.reg, MUTED, 2.5, MARGIN + 24, CONTENT_W - 24);
-      L.y -= 5;
+    const barH = 24; // padding 8+8px + texto 15px ≈ 25px → pt (barra robusta del portal)
+    const gap = 21; // 28px × 0.75
+    const colW = (CONTENT_W - gap) / 2;
+    const numBox = 24; // círculo 22px + gap 10px → pt (separación circulito→texto)
+    const textW = colW - numBox;
+    const titleSize = 10;
+    const descSize = 8;
+    const titleLh = 12;
+    const descLh = 10.5;
+    const itemGap = 9; // .pdf-toc__col gap: 12px → pt
+
+    const items = INDICE_PORTADA.map((it, i) => ({ ...it, n: i + 1 }));
+    const mid = Math.ceil(items.length / 2);
+    const cols = [items.slice(0, mid), items.slice(mid)];
+
+    // Alto de un item (título wrappeado + descripción wrappeada + gap).
+    const itemHeight = (it: { titulo: string; descripcion: string }): number => {
+      const tl = wrapText(it.titulo, L.bold, titleSize, textW).length;
+      const dl = wrapText(it.descripcion, L.reg, descSize, textW).length;
+      return tl * titleLh + 2 + dl * descLh + itemGap;
+    };
+    const colHeights = cols.map((c) => c.reduce((sum, it) => sum + itemHeight(it), 0));
+    const bodyH = Math.max(...colHeights);
+
+    // Reservar el bloque completo para no cortar una columna a mitad (el índice es fijo y corto).
+    L.ensure(barH + 14 + bodyH);
+
+    // Barra amarilla "ÍNDICE" (border-radius 4px→3pt, texto centrado en vertical).
+    const barTop = L.y;
+    L.roundedRect(MARGIN, barTop, CONTENT_W, barH, 3, { color: BRAND });
+    L.text("ÍNDICE", MARGIN + 12, barTop - barH + 8, 11, L.bold, SECTION_INK);
+    const topY = barTop - barH - 11; // margin-bottom 14px → pt
+
+    cols.forEach((col, ci) => {
+      const colX = MARGIN + ci * (colW + gap);
+      let cy = topY;
+      for (const it of col) {
+        // Circulito numerado (amarillo).
+        const cr = 8;
+        const numCx = colX + cr;
+        const numCy = cy - cr;
+        L.page.drawCircle({ x: numCx, y: numCy, size: cr, color: BRAND });
+        const nStr = String(it.n);
+        L.text(nStr, numCx - L.bold.widthOfTextAtSize(nStr, 9) / 2, numCy - 3, 9, L.bold, SECTION_INK);
+        // Título (13px/700).
+        const tx = colX + numBox;
+        let ty = cy;
+        for (const ln of wrapText(it.titulo, L.bold, titleSize, textW)) {
+          L.text(ln, tx, ty - titleSize, titleSize, L.bold, SECTION_INK);
+          ty -= titleLh;
+        }
+        // Descripción (10.5px #666).
+        ty -= 2;
+        for (const ln of wrapText(it.descripcion, L.reg, descSize, textW)) {
+          L.text(ln, tx, ty - descSize, descSize, L.reg, TOC_DESC);
+          ty -= descLh;
+        }
+        cy = ty - itemGap;
+      }
     });
+
+    L.y = topY - bodyH;
   }
 
   // ── Bloques de resumen / recomendaciones / puntaje ──
-  private summaryBlock(L: Layout, title: string, body: string): void {
+  private summaryBlock(L: Layout, title: string, body: string, variant: "default" | "reco" = "default"): void {
     this.sectionTitle(L, title);
-    const lines = wrapText(body, L.reg, 11, CONTENT_W - 24);
-    const h = 16 + lines.length * 15;
+    const lines = wrapText(body, L.reg, 10.5, CONTENT_W - 28);
+    const h = 18 + lines.length * 15;
     L.ensure(h);
     const top = L.y;
-    L.page.drawRectangle({ x: MARGIN, y: top - h, width: CONTENT_W, height: h, color: rgb(0.976, 0.976, 0.976) });
-    L.page.drawRectangle({ x: MARGIN, y: top - h, width: 3, height: h, color: rgb(0.82, 0.83, 0.85) });
-    let ly = top - 14;
+    const bg = variant === "reco" ? RECO_BG : SUMMARY_BG;
+    const bar = variant === "reco" ? RECO_BORDER : SUMMARY_BORDER;
+    L.page.drawRectangle({ x: MARGIN, y: top - h, width: CONTENT_W, height: h, color: bg });
+    L.page.drawRectangle({ x: MARGIN, y: top - h, width: 3, height: h, color: bar });
+    let ly = top - 15;
     for (const line of lines) {
-      L.text(line, MARGIN + 14, ly, 11, L.reg, INK);
+      L.text(line, MARGIN + 14, ly, 10.5, L.reg, INK);
       ly -= 15;
     }
     L.y = top - h - 14;
@@ -322,17 +522,17 @@ export class PdfLibReportGenerator implements PdfGenerator {
 
   private score(L: Layout, score: number, comentario: string): void {
     this.sectionTitle(L, "Puntaje Técnico");
-    const lines = comentario ? wrapText(comentario, L.reg, 11, CONTENT_W - 24) : [];
-    const h = 40 + lines.length * 15;
+    const lines = comentario ? wrapText(comentario, L.reg, 10.5, CONTENT_W - 28) : [];
+    const h = 42 + lines.length * 15;
     L.ensure(h);
     const top = L.y;
-    L.page.drawRectangle({ x: MARGIN, y: top - h, width: CONTENT_W, height: h, color: rgb(1, 0.992, 0.949) });
+    L.page.drawRectangle({ x: MARGIN, y: top - h, width: CONTENT_W, height: h, color: SCORE_BG });
     L.page.drawRectangle({ x: MARGIN, y: top - h, width: 3, height: h, color: BRAND });
-    L.text(`${score}`, MARGIN + 14, top - 30, 26, L.bold, INK);
-    L.text("/10", MARGIN + 14 + L.bold.widthOfTextAtSize(`${score}`, 26) + 3, top - 30, 13, L.bold, MUTED);
-    let ly = top - 44;
+    L.text(`${score}`, MARGIN + 14, top - 30, 22, L.bold, INK);
+    L.text("/10", MARGIN + 14 + L.bold.widthOfTextAtSize(`${score}`, 22) + 3, top - 30, 12, L.bold, LABEL);
+    let ly = top - 46;
     for (const line of lines) {
-      L.text(line, MARGIN + 14, ly, 11, L.reg, INK);
+      L.text(line, MARGIN + 14, ly, 10.5, L.reg, INK);
       ly -= 15;
     }
     L.y = top - h - 14;
@@ -340,75 +540,80 @@ export class PdfLibReportGenerator implements PdfGenerator {
 
   // ── Secciones + tarjetas de componente ──
   private sectionTitle(L: Layout, titulo: string): void {
-    L.ensure(34);
+    L.ensure(36);
     L.y -= 14;
-    L.text(winAnsiSafe(titulo), MARGIN, L.y - 14, 15, L.bold, rgb(0.1, 0.1, 0.1));
-    L.y -= 18;
-    L.page.drawLine({ start: { x: MARGIN, y: L.y }, end: { x: A4.w - MARGIN, y: L.y }, thickness: 1.5, color: rgb(0.1, 0.1, 0.1) });
+    L.text(winAnsiSafe(titulo), MARGIN, L.y - 14, 14, L.bold, SECTION_INK);
+    L.y -= 20;
+    // Border-bottom 2px #1a1a1a.
+    L.page.drawLine({ start: { x: MARGIN, y: L.y }, end: { x: A4.w - MARGIN, y: L.y }, thickness: 2, color: SECTION_INK });
     L.y -= 12;
   }
 
   private componentCard(L: Layout, d: ReportDetalle, images: Map<string, PDFImage>): void {
-    const innerW = CONTENT_W - 20;
-    const titleLines = capLines(wrapText(d.tituloJerarquico, L.bold, 11, innerW - 70), 4);
-    const descLines = d.descripcion ? capLines(wrapText(d.descripcion, L.reg, 10, innerW), 14) : [];
-    const notaLines = d.nota ? capLines(wrapText(`Nota del inspector: ${d.nota}`, L.reg, 9.5, innerW), 4) : [];
-    const diagLines = d.aiSummary ? capLines(wrapText(d.aiSummary, L.reg, 10, innerW), 14) : [];
+    const innerW = CONTENT_W - 24;
+    const titleLines = capLines(wrapText(d.tituloJerarquico, L.bold, 11, innerW - 72), 4);
+    const descLines = d.descripcion ? capLines(wrapText(d.descripcion, L.reg, 10.5, innerW), 14) : [];
+    const notaLines = d.nota ? capLines(wrapText(d.nota, L.reg, 10.5, innerW - 92), 4) : [];
+    const diagLines = d.aiSummary ? capLines(wrapText(d.aiSummary, L.reg, 10.5, innerW), 14) : [];
     const photos = d.imagenes.slice(0, MAX_PHOTOS);
     const loaded = photos.map((u) => images.get(u)).filter((x): x is PDFImage => x !== undefined);
     const hasMedia = d.audioData.length > 0 || d.videoData.length > 0;
 
     // ── Bloque de TEXTO (tarjeta con borde de color por estado). Las fotos van APARTE, grandes. ──
-    // Solo texto: alto acotado (< 1 página). Las fotos NO van dentro de la tarjeta (fluyen abajo).
     const notes: string[] = [];
     if (loaded.length === 0 && photos.length) notes.push(`${photos.length} foto(s) no disponibles`);
     if (hasMedia) {
       const parts: string[] = [];
       if (d.audioData.length) parts.push(`${d.audioData.length} audio(s)`);
       if (d.videoData.length) parts.push(`${d.videoData.length} video(s)`);
-      notes.push(`${parts.join(" · ")} — disponible(s) en la versión digital`);
+      notes.push(`${parts.join(" - ")} — disponible(s) en la versión digital`);
     }
     const h =
-      10 + Math.max(16, titleLines.length * 14) +
-      descLines.length * 13 +
-      (notaLines.length ? 6 + notaLines.length * 12 : 0) +
-      (diagLines.length ? 4 + diagLines.length * 13 : 0) +
+      12 + Math.max(15, titleLines.length * 15) +
+      descLines.length * 14 +
+      (notaLines.length ? 6 + notaLines.length * 13 : 0) +
+      (diagLines.length ? 4 + diagLines.length * 14 : 0) +
       (notes.length ? 16 : 0) +
       12;
 
     L.ensure(h + 8);
     const top = L.y;
     const color = ESTADO_COLOR[d.estado];
-    L.page.drawRectangle({ x: MARGIN, y: top - h, width: CONTENT_W, height: h, borderColor: CARD_BORDER, borderWidth: 0.8, color: rgb(1, 1, 1) });
-    L.page.drawRectangle({ x: MARGIN, y: top - h, width: 3.5, height: h, color });
+    L.page.drawRectangle({ x: MARGIN, y: top - h, width: CONTENT_W, height: h, borderColor: BORDER, borderWidth: 0.8, color: WHITE });
+    // Filete lateral de estado (border-left 4px).
+    L.page.drawRectangle({ x: MARGIN, y: top - h, width: 3, height: h, color });
 
-    let cy = top - 16;
+    let cy = top - 18;
     const x = MARGIN + 12;
     for (const line of titleLines) {
       L.text(line, x, cy, 11, L.bold, INK);
-      cy -= 14;
+      cy -= 15;
     }
+    // Chip de estado (delta intencional: ayuda a impresión B/N; el portal solo usa el filete).
     const chip = ESTADO_LABEL[d.estado].toUpperCase();
-    L.text(chip, A4.w - MARGIN - 12 - L.bold.widthOfTextAtSize(chip, 8), top - 15, 8, L.bold, color);
+    L.text(chip, A4.w - MARGIN - 12 - L.bold.widthOfTextAtSize(chip, 8), top - 17, 8, L.bold, color);
     for (const line of descLines) {
-      L.text(line, x, cy, 10, L.reg, rgb(0.3, 0.3, 0.32));
-      cy -= 13;
+      L.text(line, x, cy, 10.5, L.reg, DESC);
+      cy -= 14;
     }
     if (notaLines.length) {
       cy -= 6;
-      for (const line of notaLines) {
-        L.text(line, x, cy, 9.5, L.reg, rgb(0.42, 0.45, 0.5));
-        cy -= 12;
-      }
+      L.text("Nota del inspector:", x, cy, 10.5, L.bold, DESC);
+      const notaX = x + L.bold.widthOfTextAtSize("Nota del inspector: ", 10.5);
+      // Primera línea corre a la derecha del label; el resto vuelve al margen del cuerpo.
+      notaLines.forEach((line, i) => {
+        L.text(line, i === 0 ? notaX : x, cy, 10.5, L.reg, DESC);
+        cy -= 13;
+      });
     }
     if (diagLines.length) {
       cy -= 4;
       for (const line of diagLines) {
-        L.text(line, x, cy, 10, L.reg, INK);
-        cy -= 13;
+        L.text(line, x, cy, 10.5, L.reg, DESC);
+        cy -= 14;
       }
     }
-    if (notes.length) L.text(this.fit(notes.join("   |   "), L.reg, 8.5, innerW), x, cy - 4, 8.5, L.reg, MUTED);
+    if (notes.length) L.text(this.fit(notes.join("   |   "), L.reg, 8.5, innerW), x, cy - 4, 8.5, L.reg, LABEL);
     L.y = top - h - 8;
 
     // ── Fotos GRANDES (~2 por página): fluyen debajo del texto y paginan solas. ──
@@ -427,7 +632,7 @@ export class PdfLibReportGenerator implements PdfGenerator {
     const w = width * s;
     const hImg = height * s;
     L.ensure(12 + hImg + 14); // caption + foto + gap; si no entra, salta de página
-    L.text(this.fit(caption, L.reg, 8, CONTENT_W), MARGIN, L.y - 8, 8, L.reg, MUTED);
+    L.text(this.fit(caption, L.reg, 8, CONTENT_W), MARGIN, L.y - 8, 8, L.reg, LABEL);
     L.y -= 12;
     L.page.drawImage(img, { x: MARGIN + (CONTENT_W - w) / 2, y: L.y - hImg, width: w, height: hImg });
     L.y -= hImg + 14;
@@ -437,7 +642,7 @@ export class PdfLibReportGenerator implements PdfGenerator {
    * Pre-descarga TODAS las fotos del informe en PARALELO (tope `IMAGE_CONCURRENCY`) y las embebe,
    * devolviendo un mapa `url → PDFImage`. La red es el cuello de botella: bajarlas concurrentemente
    * (en vez de una por una) recorta la latencia de ~suma a ~suma/concurrencia. Nunca rompe: una
-   * foto que falla se omite (el informe se genera igual, con placeholder). Sin `fetchImage` → vacío.
+   * foto que falla se omite (el informe se genera igual). Sin `fetchImage` → vacío.
    */
   private async prefetchImages(doc: PDFDocument, detalles: ReportDetalle[]): Promise<Map<string, PDFImage>> {
     const map = new Map<string, PDFImage>();
@@ -474,19 +679,35 @@ export class PdfLibReportGenerator implements PdfGenerator {
     return map;
   }
 
+  /** Pie: código/generado a los lados, aviso centrado, y descargo con filete punteado (§5.5). */
   private footer(L: Layout, reportCode: string, generadoEn: string): void {
-    const y = BOTTOM - 18;
-    L.page.drawLine({ start: { x: MARGIN, y: y + 16 }, end: { x: A4.w - MARGIN, y: y + 16 }, thickness: 0.6, color: RULE });
-    L.text(winAnsiSafe(reportCode || ""), MARGIN, y + 4, 8, L.reg, MUTED);
-    const right = winAnsiSafe(generadoEn || "");
-    L.text(right, A4.w - MARGIN - L.reg.widthOfTextAtSize(right, 8), y + 4, 8, L.reg, MUTED);
-    L.text(
-      "Documento informativo. Análisis asistidos por IA y validados por inspectores certificados.",
+    L.ensure(56);
+    L.y -= 14;
+    L.page.drawLine({ start: { x: MARGIN, y: L.y }, end: { x: A4.w - MARGIN, y: L.y }, thickness: 0.8, color: BORDER });
+    L.y -= 14;
+    // Fila: código (izq) · generado (der). El aviso va centrado en su propia línea (evita solape).
+    L.text(winAnsiSafe(reportCode || ""), MARGIN, L.y, 8, L.reg, FOOTER_MAIN);
+    const gen = winAnsiSafe(generadoEn || "");
+    L.text(gen, A4.w - MARGIN - L.reg.widthOfTextAtSize(gen, 8), L.y, 8, L.reg, FOOTER_MAIN);
+    L.y -= 11;
+    L.textCentered("Documento informativo. No sustituye revisión técnica presencial.", MARGIN, CONTENT_W, L.y, 8, L.reg, FOOTER_MAIN);
+    L.y -= 12;
+    L.page.drawLine({
+      start: { x: MARGIN, y: L.y },
+      end: { x: A4.w - MARGIN, y: L.y },
+      thickness: 0.6,
+      color: BORDER,
+      dashArray: [2, 2],
+    });
+    L.y -= 10;
+    L.textCentered(
+      "Los análisis de componentes de este informe son asistidos por inteligencia artificial y validados por inspectores certificados.",
       MARGIN,
-      y - 6,
-      7,
+      CONTENT_W,
+      L.y,
+      7.5,
       L.reg,
-      FAINT,
+      FOOTER_FAINT,
     );
   }
 
