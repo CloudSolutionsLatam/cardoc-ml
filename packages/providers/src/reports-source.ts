@@ -29,6 +29,39 @@ export interface ReportsSource {
   openPdf(accountId: string, id: string): Promise<ReportPdf>;
 }
 
+/** Sanitiza un componente para nombre de archivo: sin acentos, solo [A-Za-z0-9], resto → "-". */
+function sanitizeFilenamePart(value: string, fallback: string): string {
+  const clean = (value ?? "")
+    .normalize("NFD")
+    .replace(/\p{M}/gu, "") // quita marcas combinantes (acentos, tilde de la ñ) tras NFD
+    .replace(/[^A-Za-z0-9]+/g, "-") // todo lo no alfanumérico (espacios, /, #, ", _) -> guion
+    .replace(/^-+|-+$/g, ""); // recorta guiones de los extremos
+  return clean || fallback;
+}
+
+/** Fecha "dd/mm/yyyy" (o ya ISO "AAAA-MM-DD") → ISO 8601 "AAAA-MM-DD"; si no parsea, `fallback`. */
+function toIsoDate(value: string, fallback: string): string {
+  const s = (value ?? "").trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  const m = /^(\d{2})\/(\d{2})\/(\d{4})/.exec(s);
+  return m ? `${m[3]}-${m[2]}-${m[1]}` : fallback;
+}
+
+/**
+ * Nomenclatura del PDF (decisión §10 D4, confirmada por Cardoc 2026-07-02):
+ * `NombreCliente_IDInterno_Fecha.pdf` con fecha en ISO 8601 (AAAA-MM-DD).
+ * - NombreCliente ← `cliente.nombre` (fallback "Cliente").
+ * - IDInterno ← `reportCode` (hoy "#R-12345"; PENDIENTE que el backend exponga el "INFREV-xxxx"
+ *   del CRM en el detalle — ver OQ). Fallback al `id` de la URL.
+ * - Fecha ← `fechaInspeccion` normalizada a ISO (fallback "sin-fecha").
+ */
+export function buildReportFilename(informe: InformeReport, fallbackId: string): string {
+  const cliente = sanitizeFilenamePart(informe.cliente?.nombre ?? "", "Cliente");
+  const idInterno = sanitizeFilenamePart(informe.reportCode ?? "", sanitizeFilenamePart(fallbackId, "informe"));
+  const fecha = toIsoDate(informe.fechaInspeccion ?? "", "sin-fecha");
+  return `${cliente}_${idInterno}_${fecha}.pdf`;
+}
+
 /**
  * Fuente de informes de muestra para dev/test. `openPdf` genera un PDF **real** (pdf-lib) a
  * partir de los datos de muestra — el read desde Creator (`Analisis`) se cablea en E-03; la
@@ -67,11 +100,12 @@ export class MockReportsSource implements ReportsSource {
     }
     // Generación perezosa: hoy se genera siempre (el read real de Analisis + caché es E-03).
     // Se arma un InformeReport de MUESTRA (los datos ricos vienen de Creator al cablear E-03).
-    const bytes = await this.pdfGenerator.generate(this.sampleReport(informe));
+    const report = this.sampleReport(informe);
+    const bytes = await this.pdfGenerator.generate(report);
     return {
       stream: Readable.from(Buffer.from(bytes)),
       contentType: "application/pdf",
-      filename: `informe-${id}.pdf`,
+      filename: buildReportFilename(report, id),
     };
   }
 
@@ -207,7 +241,7 @@ export class ZohoCreatorReportsSource implements ReportsSource {
     return {
       stream: Readable.from(Buffer.from(bytes)),
       contentType: "application/pdf",
-      filename: `informe-${id}.pdf`,
+      filename: buildReportFilename(informe, id),
     };
   }
 }

@@ -50,7 +50,8 @@ describe("streamReportPdf — stream + tenancy (gate A→B = not-found)", () => 
   it("streamea el PDF de un informe propio (application/pdf, cuerpo %PDF)", async () => {
     const pdf = await streamReportPdf("acc_A", "acc_A-INF-001", deps);
     expect(pdf.contentType).toBe("application/pdf");
-    expect(pdf.filename).toContain("acc_A-INF-001");
+    // D4 (mail Cardoc 2026-07-02): nomenclatura NombreCliente_IDInterno_Fecha.pdf (el "_" del id se sanea a "-").
+    expect(pdf.filename).toBe("Cliente-Demo_acc-A-INF-001_2026-06-20.pdf");
     const body = await drain(pdf.stream);
     expect(body.toString("utf8").startsWith("%PDF")).toBe(true);
   });
