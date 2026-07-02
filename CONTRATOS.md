@@ -1,7 +1,7 @@
 ---
 title: Contratos de API — cardoc-ml
 status: borrador-para-validacion (entregable E-06 — referencia para el equipo de integración)
-last_reviewed: 2026-06-25
+last_reviewed: 2026-07-02
 ---
 
 # Contratos de API — cardoc-ml
@@ -311,11 +311,16 @@ El handler setea, **antes del primer byte**:
 
 ```
 Content-Type: application/pdf            (de pdf.contentType)
-Content-Disposition: attachment; filename="informe-<id>.pdf"
+Content-Disposition: attachment; filename="NombreCliente_IDInterno_Fecha.pdf"
 Cache-Control: no-store
 ```
 
 …y luego `pdf.stream.pipe(res)`. El body es el PDF binario.
+
+> **Nomenclatura del archivo** (decisión §10 D4, mail Cardoc 2026-07-02): `NombreCliente_IDInterno_Fecha.pdf`
+> con fecha ISO 8601 (`AAAA-MM-DD`); `buildReportFilename` sanea acentos/espacios/caracteres inseguros.
+> `IDInterno` = `reportCode` del detalle ("#R-12345" → `R-12345`); si el negocio requiere el `INFREV-xxxx`
+> del CRM, el detalle debe exponer ese `number` (deuda abierta).
 
 Manejo de error a mitad de stream (`streamPdfHandler`): si el `Readable` falla **antes** de enviar
 bytes → se traduce a `502 UPSTREAM_ERROR` (`details.upstream = "workdrive"`); si **ya** se enviaron
@@ -341,10 +346,35 @@ curl -i -L "http://localhost:3000/v1/informes/acc_dev-INF-001/pdf" \
   -o informe.pdf
 ```
 
-> El flujo de generación perezosa (`Analisis.pdf_url` lleno → stream WorkDrive; vacío → generar
-> en Catalyst + write-back → stream) está **documentado en el puerto** (`reports-source.ts`) pero
-> el adapter real (`ZohoCreatorReportsSource`) es **stub** (`NotImplementedError`, E-03). El
-> **cómo** se genera el PDF cuando falta es una **open question** (§9).
+> **As-built (E-03):** `ZohoCreatorReportsSource.openPdf` **está implementado** — trae el detalle de
+> Creator (Custom API REST server-to-server), lo transforma y **genera el PDF con pdf-lib on-the-fly**
+> (probado end-to-end). Lo que sigue **pendiente** es la caché/write-back a `Analisis.pdf_url` (hoy se
+> genera en cada request; ver OQ-N8) y el listado (`listByAccount`/`findById` siguen `NotImplementedError`,
+> ADR-0015). `PDF_NOT_AVAILABLE` es alcanzable recién al cablear la resolución perezosa.
+
+---
+
+## 4bis. `GET /v1/informes/solicitud/:nroSolicitud/pdf`
+
+Variante que recibe el **N.º de Solicitud externo** en lugar del id interno de Creator (decisión §10 D3b,
+mail Cardoc 2026-07-02). Resuelve el informe vía CRM y reusa el mismo stream que §4.
+
+| | |
+|---|---|
+| **Método / path** | `GET /v1/informes/solicitud/:nroSolicitud/pdf` |
+| **Scope requerido** | `reports:pdf` |
+| **Cap (endpoint lógico)** | `informes-pdf` (mismo que §4) |
+| **Handler** | `routes/informes.ts` (`streamPdfBySolicitudHandler`) · use-case `streamReportPdfByNroSolicitud` |
+
+**Resolución:** busca en el módulo CRM `Informes_Revision` por `Nro_Solicitud_Externo:equals:<nroSolicitud>`,
+lee el campo `Creator_Analisis_ID` (id del Análisis en Creator) y delega en `openPdf(accountId, analisisId)`
+(mismos headers/errores que §4). Si el N.º de Solicitud no resuelve → **`404 NOT_FOUND`** (no divulgación).
+El consumidor **nunca ve el id interno de Creator**. 4 segmentos de path → no colisiona con `:id/pdf` (3).
+
+```bash
+curl -i "http://localhost:3000/v1/informes/solicitud/1001/pdf" \
+  -H "X-Api-Key: test-token" -o informe.pdf
+```
 
 ---
 
@@ -459,6 +489,9 @@ registre; y loguea **solo** `correlationId + método + path + code` (nunca paylo
 
 - Por consumidor vía `CapRepository.getConfig(consumerId, endpoint)` (tabla `consumer_caps`).
 - Fallback a defaults de env: `CARDOC_CAP_DEFAULT_HOUR` (1000), `…_DAY` (10000), `…_WEEK` (50000).
+- **Valores acordados con Cardoc (§10 D6, 2026-07-02)** para `consumer_ml`, por **hora**: `opportunity-contact`=**60**,
+  `informes-list`=**120**, `informes-pdf`=**100** (día/semana quedan en defaults como guardrail). Sembrado con
+  `scripts/seed-caps.mjs` → `scripts/datastore-bootstrap/consumer_caps.csv` (cargar filas en consola con Add Row).
 - Una ventana con límite `null` se **omite** (sin tope).
 
 ### 7.2 Headers de estado

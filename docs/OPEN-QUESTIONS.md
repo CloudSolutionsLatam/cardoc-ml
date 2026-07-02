@@ -2,7 +2,7 @@
 title: Open questions — cardoc-ml (registro único)
 status: active
 document_type: open-questions
-last_reviewed: 2026-06-30
+last_reviewed: 2026-07-02
 ---
 
 # Open questions — registro único
@@ -57,3 +57,36 @@ resultante al [log de ADRs](decisions/README.md) si corresponde.
 - El estado `error` ahora es **reintentable** (efecto idempotente: dedup por cédula + `EXTERNAL_ID`). Residual: dos retries concurrentes de un row en `error` podrían ejecutar el efecto en paralelo (ventana acotada por los dedup, sin CAS sobre el estado del row).
 - Smoke e2e ya **versionado** en el repo (`scripts/smoke-catalyst-crm.mjs`, 5/5 en Catalyst; smoke local 21/21). Follow-up: mantenerlo al día con nuevos endpoints.
 - Runbooks concretos sin escribir (solo la plantilla) — dry-run pre-producción.
+
+## Cierre §10 CR-003 (mail Cardoc, 2026-07-02)
+
+Cardoc respondió las 7 decisiones pendientes del §10 del CR-003. Estado de cierre e impacto en el código
+(detalle por `file:line` en el plan de reconciliación, workflow `walwrb4r5`):
+
+| # | Decisión | Definición Cardoc | Estado en código | Acción |
+|---|----------|-------------------|------------------|--------|
+| D1 | Módulo + "Portal solicitante" | Mantener Informes de Revisión + agregar campo técnico "Portal solicitante" | Existe en LECTURA (`portalType`); falta el WRITE | Crear campo `Portal_Solicitante` en consola (OQ-P8) + escribirlo server-side con `PORTAL_TYPE` |
+| D2 | Dedup Contactos | Sugieren **teléfono** | ⚠️ **Discrepancia** (ver abajo) | **Mantener NroCedula** (ADR-0003); **escalar a PM** |
+| D3a | Stage Oportunidad | "Nueva Solicitud" (funnel B2B) | ✅ ya implementado (OQ-N4) | Constancia |
+| D3b | Gating de exposición | Exponer solo si Oportunidad=Completado **y** Informe=Finalizado | Gating **descartado** (sin Analisis no hay datos) | ✅ **Implementado**: variante `GET /v1/informes/solicitud/:nroSolicitud/pdf` busca en `Informes_Revision` por `Nro_Solicitud_Externo` → `Creator_Analisis_ID` → PDF (Mock + Zoho real + tests). api_name confirmados por Nestor 2026-07-02 |
+| D4 | Nomenclatura PDF | `NombreCliente_IDInterno_Fecha.pdf` (fecha ISO) | ✅ **implementado** (`buildReportFilename`, `reports-source.ts`) | ⚠️ IDInterno hoy = `reportCode` "#R-12345"; el ejemplo "INFREV-4248" **no está en el detalle** → pedir a backend exponer el `number` del CRM |
+| D5 | Filtros / ID opaco | ID de Informe opaco, fecha ISO, Estado Open/Completed | Endpoint 2 **desestimado** (ADR-0015); el CR es previo | Sin acción de listado. El "ID opaco" solo aplicaría a la URL del Endpoint 3 si se decide (hoy usa id interno de Creator) |
+| D6 | Valores de cap | POST 60/h · GET informes 120/h · GET PDF 100/h | ✅ **sembrado** (`consumer_caps.csv` + `scripts/seed-caps.mjs`) | Cargar filas en consola (Add Row). Día/semana quedan en defaults (guardrail) |
+| D7 | Cross-tenant | **404** (no divulgación) | ✅ ya responde 404 `NOT_FOUND` (ADR-0005) | Constancia; sellar ADR-0005 |
+
+### ⚠️ D2 — Discrepancia para PM (dedup Contactos: teléfono vs cédula)
+
+El mail de Cardoc (2026-07-02) sugiere usar **número de teléfono** como clave de dedup de Contactos.
+**Sin embargo, el JSON de contrato que el propio cliente compartió indica `Cedula` como identificador**, y por
+eso nuestro [ADR-0003](decisions/README.md#adr-0003) implementó la dedup por **NroCedula** (campo `Cedula` en
+Contacts, ya creado en el CRM). **Decisión operativa (Nestor 2026-07-02):** por ahora se **mantiene NroCedula**
+(no se cambia a teléfono) y se **eleva la discrepancia al PM** para conciliar el contrato definitivo. Argumento
+técnico a favor de la cédula: es numérica, estable y única; el teléfono es opcional, mutable y sin normalizar
+(`+598…` ≠ `09…` en el `equals` exacto de Zoho) → riesgo de falsos duplicados. Relacionado: OQ-N3.
+
+### Inputs pendientes de Cardoc para completar el cierre
+
+- ~~**D3b:** api_name del módulo `Informes_Revision`~~ ✅ **RESUELTO (Nestor 2026-07-02):** módulo `Informes_Revision`, búsqueda por `Nro_Solicitud_Externo`, id de Análisis en `Creator_Analisis_ID`. Variante implementada.
+- **D4:** ¿IDInterno del filename = `reportCode` ("#R-12345") o el `number` del CRM ("INFREV-xxxx")? (hoy el detalle no trae `number`).
+- **D1:** confirmar el api_name definitivo del campo "Portal solicitante" al crearlo en consola.
+- **D6:** ¿día/semana explícitos por endpoint, o se dejan en defaults como guardrail?
