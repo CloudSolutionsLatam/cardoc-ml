@@ -32,6 +32,8 @@ const A4 = { w: 595.28, h: 841.89 } as const;
 const MARGIN = 42;
 const CONTENT_W = A4.w - 2 * MARGIN;
 const BOTTOM = 54; // margen inferior (deja lugar para el pie)
+const MAX_PHOTOS = 6; // tope de fotos por componente
+const IMAGE_CONCURRENCY = 8; // descargas de fotos en paralelo (tope; la red es el cuello de botella)
 
 const INK = rgb(0.17, 0.17, 0.17);
 const MUTED = rgb(0.6, 0.6, 0.62);
@@ -197,11 +199,13 @@ export class PdfLibReportGenerator implements PdfGenerator {
     if (informe.recomendaciones) this.summaryBlock(L, "Recomendaciones del Inspector", informe.recomendaciones);
     if (informe.score != null) this.score(L, informe.score, informe.score_comentario);
 
+    // Pre-descarga TODAS las fotos en PARALELO antes de renderizar (evita el fetch secuencial de a una).
+    const images = await this.prefetchImages(doc, informe.detalles);
     for (const seccion of informe.secciones) {
       const detalles = informe.detalles.filter((d) => d.seccionId === seccion.id);
       if (!detalles.length) continue;
       this.sectionTitle(L, seccion.titulo);
-      for (const d of detalles) await this.componentCard(L, d);
+      for (const d of detalles) this.componentCard(L, d, images);
     }
 
     this.footer(L, informe.reportCode, generadoEn);
@@ -341,7 +345,7 @@ export class PdfLibReportGenerator implements PdfGenerator {
     L.y -= 12;
   }
 
-  private async componentCard(L: Layout, d: ReportDetalle): Promise<void> {
+  private componentCard(L: Layout, d: ReportDetalle, images: Map<string, PDFImage>): void {
     const innerW = CONTENT_W - 20;
     // Medir el alto para no cortar la tarjeta entre páginas (break-inside: avoid).
     // Cap por bloque: acota el alto máximo de la tarjeta MUY por debajo de una página (evita que
@@ -350,9 +354,9 @@ export class PdfLibReportGenerator implements PdfGenerator {
     const descLines = d.descripcion ? capLines(wrapText(d.descripcion, L.reg, 10, innerW), 14) : [];
     const notaLines = d.nota ? capLines(wrapText(`Nota del inspector: ${d.nota}`, L.reg, 9.5, innerW), 4) : [];
     const diagLines = d.aiSummary ? capLines(wrapText(d.aiSummary, L.reg, 10, innerW), 14) : [];
-    const photos = d.imagenes.slice(0, 6);
-    const images = await this.loadImages(L, photos);
-    const photoRows = images.length ? Math.ceil(images.length / 3) : 0;
+    const photos = d.imagenes.slice(0, MAX_PHOTOS);
+    const loaded = photos.map((u) => images.get(u)).filter((x): x is PDFImage => x !== undefined);
+    const photoRows = loaded.length ? Math.ceil(loaded.length / 3) : 0;
     const hasMedia = d.audioData.length > 0 || d.videoData.length > 0;
 
     const h =
@@ -398,12 +402,12 @@ export class PdfLibReportGenerator implements PdfGenerator {
         cy -= 13;
       }
     }
-    // Fotos (grilla de 3 por fila) o placeholder.
-    if (images.length) {
+    // Fotos (grilla de 3 por fila) o placeholder si no se pudieron cargar.
+    if (loaded.length) {
       cy -= 4;
       const gap = 6;
       const cellW = (innerW - 2 * gap) / 3;
-      images.forEach((img, i) => {
+      loaded.forEach((img, i) => {
         const col = i % 3;
         const row = Math.floor(i / 3);
         const px = x + col * (cellW + gap);
@@ -414,7 +418,7 @@ export class PdfLibReportGenerator implements PdfGenerator {
       });
       cy -= photoRows * 66;
     } else if (photos.length) {
-      L.text(`${photos.length} foto(s) — no embebidas (WorkDrive pendiente)`, x, cy - 4, 8.5, L.reg, MUTED);
+      L.text(`${photos.length} foto(s) no disponibles`, x, cy - 4, 8.5, L.reg, MUTED);
       cy -= 14;
     }
     if (hasMedia) {
@@ -426,24 +430,45 @@ export class PdfLibReportGenerator implements PdfGenerator {
     L.y = top - h - 8;
   }
 
-  /** Intenta traer+embeber las fotos; degrada a [] si no hay fetcher o falla (nunca rompe). */
-  private async loadImages(L: Layout, urls: string[]): Promise<PDFImage[]> {
+  /**
+   * Pre-descarga TODAS las fotos del informe en PARALELO (tope `IMAGE_CONCURRENCY`) y las embebe,
+   * devolviendo un mapa `url → PDFImage`. La red es el cuello de botella: bajarlas concurrentemente
+   * (en vez de una por una) recorta la latencia de ~suma a ~suma/concurrencia. Nunca rompe: una
+   * foto que falla se omite (el informe se genera igual, con placeholder). Sin `fetchImage` → vacío.
+   */
+  private async prefetchImages(doc: PDFDocument, detalles: ReportDetalle[]): Promise<Map<string, PDFImage>> {
+    const map = new Map<string, PDFImage>();
     const fetchImage = this.opts.fetchImage;
-    if (!fetchImage) return [];
-    const doc = L.doc;
-    const out: PDFImage[] = [];
-    for (const url of urls) {
+    if (!fetchImage) return map;
+    const urls = [...new Set(detalles.flatMap((d) => d.imagenes.slice(0, MAX_PHOTOS)))];
+    if (!urls.length) return map;
+
+    // 1) Descarga concurrente con tope: workers que consumen la lista de URLs.
+    const bytesByUrl = new Map<string, Uint8Array>();
+    let next = 0;
+    const worker = async (): Promise<void> => {
+      while (next < urls.length) {
+        const url = urls[next++] as string;
+        try {
+          const bytes = await fetchImage(url);
+          if (bytes && bytes.length >= 4) bytesByUrl.set(url, bytes);
+        } catch {
+          // WorkDrive caído / imagen ilegible → se omite
+        }
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(IMAGE_CONCURRENCY, urls.length) }, worker));
+
+    // 2) Embed secuencial (CPU rápido; no muta el doc de pdf-lib en paralelo).
+    for (const [url, bytes] of bytesByUrl) {
       try {
-        const bytes = await fetchImage(url);
-        if (!bytes || bytes.length < 4) continue;
         const isPng = bytes[0] === 0x89 && bytes[1] === 0x50;
-        const img = isPng ? await doc.embedPng(bytes) : await doc.embedJpg(bytes);
-        out.push(img);
+        map.set(url, isPng ? await doc.embedPng(bytes) : await doc.embedJpg(bytes));
       } catch {
-        // imagen ilegible/insegura → se omite, el informe igual se genera
+        // imagen corrupta → se omite
       }
     }
-    return out;
+    return map;
   }
 
   private footer(L: Layout, reportCode: string, generadoEn: string): void {
