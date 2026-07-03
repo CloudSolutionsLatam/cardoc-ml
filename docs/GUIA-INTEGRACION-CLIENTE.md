@@ -473,7 +473,7 @@ Recorré el ciclo completo con **un mismo `NroSolicitud`** (elegí uno único, p
 - **PDF prematuro:** `GET .../pdf` **antes** del paso 4 → `404`.
 - **No divulgación:** pedir un `NroSolicitud` que no corresponde → `404` (no `403`).
 - **Validación:** `POST` con una clave extra → `400`.
-- **Estado no notificable:** notificar con `stage: "Nueva Solicitud"` → `200 skipped`.
+- **Estado no notificable:** notificar con `stage: "Cancelado"` → `200 skipped`.
 
 ---
 
