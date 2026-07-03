@@ -17,9 +17,9 @@ import type { MlCenterClient, MlEstado } from "@cardoc/providers";
  *  - `Nueva Solicitud`: estado inicial (ML ya lo conoce, fue quien lo creó) — no se notifica.
  *  - `Cancelado`: terminal; ML no tiene un estado de cancelación en el contrato AutoCheck.
  *
- * ⚠️ Residual (OQ-N6.a): falta confirmar que el workflow del CRM dispare sobre `Deals.Stage`
- * y no sobre `Informes_Revision.Estado` (que el field-tracker trackea). Si fuera lo segundo,
- * las claves de este mapa cambian por los valores del picklist `Estado`.
+ * ✅ Confirmado (OQ-N6.a, Nestor 2026-07-03): el workflow del CRM dispara sobre `Deals.Stage`
+ * (no sobre `Informes_Revision.Estado`), así que las claves de este mapa —los valores de Stage
+ * del pipeline B2B— son las correctas.
  */
 export const STAGE_TO_ESTADO: Record<string, MlEstado> = {
   "Agendado B2B": "COORDINACIÓN",
