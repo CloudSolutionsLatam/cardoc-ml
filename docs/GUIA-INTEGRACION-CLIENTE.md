@@ -64,7 +64,7 @@ en Cardoc 360 y la descarga del PDF. El ciclo **cierra sobre el mismo número** 
       │                       │<── POST /v1/internal/deal-estado ─────────────│
       │   updateEstado        │    (secreto interno · mapea Stage→Estado)     │
       │<══════════════════════│                       │                       │
-      │   PENDIENTE / COORDINACIÓN / FINALIZADO        │                       │
+      │   COORDINACIÓN / FINALIZADO                    │                       │
       │                       │                       │                       │
  (3)  │                       │             el análisis se APRUEBA en Cardoc 360
       │                       │                       │<── Creator_Analisis_ID ──│
@@ -85,8 +85,9 @@ en Cardoc 360 y la descarga del PDF. El ciclo **cierra sobre el mismo número** 
 
 ### 2.2 El estado de la Oportunidad (pipeline B2B)
 
-La Oportunidad recorre el **pipeline B2B** del CRM. Cada avance de etapa gobierna qué se notifica a
-ML y cuándo queda disponible el PDF:
+La Oportunidad recorre el **pipeline B2B** del CRM —el canal de **automotoras**, distinto del
+pipeline de **clientes finales** (retail)—. Cada avance de etapa gobierna qué se notifica a ML y
+cuándo queda disponible el PDF:
 
 ```
   Nueva Solicitud ──► Agendado B2B ──► Completado ──► Cerrado
@@ -116,8 +117,10 @@ gobiernan cómo se comporta la API en la práctica—. Cada una se ilustra con u
 **Qué se decidió.** Toda alta crea la Oportunidad en el estado **`Nueva Solicitud`** del pipeline
 comercial **B2B** (el backend fija el estado; el consumidor no puede elegirlo).
 
-**Por qué.** El backend se integra al flujo de agendamiento **existente** sin rediseñarlo: la
-solicitud entra por el mismo funnel B2B que el resto de la operación de Cardoc.
+**Por qué.** El backend se integra al flujo de agendamiento **existente** sin rediseñarlo. Las
+solicitudes que entran por la API son del **canal corporativo de automotoras**: por eso viajan por el
+pipeline **B2B**, distinto del pipeline de **clientes finales** (retail) que Cardoc opera en paralelo.
+La API actúa **únicamente** sobre el canal B2B; el flujo retail queda intacto y fuera de su alcance.
 
 **Escenario.** ML da de alta la solicitud `NroSolicitud 908812` (Chevrolet Onix, matrícula SBA1234).
 Se crea el Deal *"ML 908812"* en pipeline B2B, etapa `Nueva Solicitud`. A partir de ahí lo mueve el
@@ -473,7 +476,7 @@ Recorré el ciclo completo con **un mismo `NroSolicitud`** (elegí uno único, p
 - **PDF prematuro:** `GET .../pdf` **antes** del paso 4 → `404`.
 - **No divulgación:** pedir un `NroSolicitud` que no corresponde → `404` (no `403`).
 - **Validación:** `POST` con una clave extra → `400`.
-- **Estado no notificable:** notificar con `stage: "Cancelado"` → `200 skipped`.
+- **Estado no notificable:** notificar con `stage: "Nueva Solicitud"` → `200 skipped`.
 
 ---
 
