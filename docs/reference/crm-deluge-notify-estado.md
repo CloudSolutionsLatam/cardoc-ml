@@ -46,7 +46,8 @@ string button.ml_notificar_estado_oportunidad1(String dealId)
 
 	// ── Mapeo Stage (CRM) → Estado (ML) ───────────────────────────────────
 	// ESPEJO de STAGE_TO_ESTADO del backend (packages/application/src/notify-estado-change.ts).
-	// SOLO estos stages notifican a ML; el resto (Nueva Solicitud, Cancelado, …) NO dispara.
+	// Acá se usa SOLO para decidir cuándo adjuntar linkResultado (FINALIZADO). La función SIEMPRE
+	// notifica: el backend re-mapea el stage crudo, decide sent/skipped y lo registra en audit_log.
 	// ⚠️ Mantener EN SINCRONÍA con el backend si cambian los nombres de stage del pipeline B2B.
 	stageToEstado = Map();
 	stageToEstado.put("Agendado B2B", "COORDINACIÓN");
@@ -58,36 +59,31 @@ string button.ml_notificar_estado_oportunidad1(String dealId)
 	stage = ifnull(deal.get("Stage"), "").toString().trim();
 	nroSolicitud = ifnull(deal.get("EXTERNAL_ID"), "").toString();
 
-	// 2. ¿Este stage notifica? (gate local: evita llamadas innecesarias)
-	estado = ifnull(stageToEstado.get(stage), "");
-	if(estado == "")
-	{
-		return "skipped: el stage '" + stage + "' no mapea a un Estado de ML (no se notifica).";
-	}
-	// Guard: sin NroSolicitud no hay a quién notificar
+	// Guard: sin NroSolicitud no se puede notificar (el payload lo exige)
 	if(nroSolicitud == "" || nroSolicitud == "null")
 	{
 		return "ERROR: el Deal " + dealId + " no tiene EXTERNAL_ID (NroSolicitud); no se notifica.";
 	}
 
-	// 3. Payload — SOLO los campos del contrato (el endpoint valida con .strict()).
+	// 2. Payload — SIEMPRE se notifica; el backend decide sent/skipped (.strict(): solo estos campos).
 	//    Se envía el STAGE crudo; el backend re-mapea (fuente de verdad única) y valida el invariante.
+	estado = ifnull(stageToEstado.get(stage), "");
 	payload = Map();
 	payload.put("nroSolicitud", nroSolicitud.toLong());
 	payload.put("stage", stage);
 	// LinkResultado (URL del PDF por NroSolicitud) es obligatorio para FINALIZADO —
-	// en Completado/Cerrado el informe ya existe. En COORDINACIÓN todavía no hay PDF.
+	// en Completado/Cerrado el informe ya existe. En COORDINACIÓN/otros no se adjunta.
 	if(estado == "FINALIZADO")
 	{
 		payload.put("linkResultado", baseUrl + "/v1/informes/solicitud/" + nroSolicitud + "/pdf");
 	}
 
-	// 4. Headers — auth por shared-secret (NO Bearer; Catalyst reserva Authorization)
+	// 3. Headers — auth por shared-secret (NO Bearer; Catalyst reserva Authorization)
 	headers = Map();
 	headers.put("x-internal-secret", internalSecret);
 	headers.put("Content-Type", "application/json");
 
-	// 5. POST a Catalyst: /v1/internal/deal-estado
+	// 4. POST a Catalyst: /v1/internal/deal-estado
 	response = invokeurl
 	[
 		url : baseUrl + "/v1/internal/deal-estado"
@@ -104,10 +100,10 @@ string button.ml_notificar_estado_oportunidad1(String dealId)
 ## Notas de implementación
 
 - **Mapeo local `stageToEstado`** — es un **espejo** del `STAGE_TO_ESTADO` del backend
-  (`packages/application/src/notify-estado-change.ts`). Cumple dos funciones: (1) *gate* — decide
-  qué stages disparan la llamada (los no mapeados devuelven "skipped" local, sin pegarle al endpoint);
-  (2) decide cuándo adjuntar `linkResultado` (solo `FINALIZADO`). El backend **igualmente re-mapea** el
-  `stage` crudo que recibe → es la **fuente de verdad única** y red de seguridad ante llamadas directas.
+  (`packages/application/src/notify-estado-change.ts`), usado **solo** para decidir cuándo adjuntar
+  `linkResultado` (solo `FINALIZADO`). La función **SIEMPRE notifica**: envía el `stage` crudo y el
+  backend re-mapea, decide `sent`/`skipped` y lo registra en `audit_log` — es la **fuente de verdad
+  única**. Así queda rastro de cada cambio de estado (incluidos los `skipped`) en los Logs de Catalyst.
   ⚠️ Si cambian los nombres de stage del pipeline B2B, actualizar **ambos** (Deluge + backend).
 - **`parameters : payload.toString()`** — `payload` es un `Map`; `.toString()` produce JSON y,
   junto al header `Content-Type: application/json`, se envía como body JSON crudo (si se pasara
