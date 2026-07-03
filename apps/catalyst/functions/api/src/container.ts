@@ -32,6 +32,7 @@ import {
   MockCrmClient,
   MockMlCenterClient,
   MockReportsSource,
+  LoggingMlCenterClient,
   MlCenterHttpClient,
   ZohoCreatorReportsSource,
   ZohoCrmClient,
@@ -46,6 +47,7 @@ const useDatastore = process.env["CARDOC_PERSISTENCE"] === "datastore";
 const useZohoCrm = process.env["CARDOC_CRM_MODE"] === "zoho";
 const useCreator = process.env["CARDOC_REPORTS_MODE"] === "creator";
 const useMlHttp = process.env["CARDOC_ML_MODE"] === "http";
+const useMlLog = process.env["CARDOC_ML_MODE"] === "log"; // solo loggea el payload que iría a ML (inspección)
 
 const DEV_CONSUMER = "consumer_dev";
 const DEV_ACCOUNT = "acc_dev";
@@ -73,14 +75,17 @@ const memCap = new InMemoryCapRepository();
 const memCrm = new MockCrmClient();
 const memReports = new MockReportsSource();
 
-// Cliente ML (singleton: el adapter HTTP cachea el JWT ~1h). Mock por defecto.
+// Cliente ML (singleton: el adapter HTTP cachea el JWT ~1h). "http" → real; "log" → solo loggea
+// el payload (inspección, no toca ML); default → Mock.
 const mlCenter: MlCenterClient = useMlHttp
   ? new MlCenterHttpClient({
       baseUrl: process.env["MLCENTER_BASE_URL"] ?? "https://www.mlcenter.com.uy/ApiMiAutoTesting",
       usuario: process.env["MLCENTER_USER"] ?? "",
       password: process.env["MLCENTER_PASSWORD"] ?? "",
     })
-  : new MockMlCenterClient();
+  : useMlLog
+    ? new LoggingMlCenterClient()
+    : new MockMlCenterClient();
 
 if (!useDatastore) {
   memTokens.seed({

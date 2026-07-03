@@ -44,6 +44,24 @@ export class MockMlCenterClient implements MlCenterClient {
   }
 }
 
+/**
+ * Adapter de INSPECCIÓN: NO llama a ML. Loggea (console.log → logs de la función Catalyst) el
+ * **payload exacto** que `MlCenterHttpClient` le POSTearía a AutoCheck, para ver qué manda cardoc
+ * cuando el CRM dispara un cambio de estado. Devuelve éxito. Se activa con `CARDOC_ML_MODE=log`.
+ */
+export class LoggingMlCenterClient implements MlCenterClient {
+  readonly calls: UpdateEstadoInput[] = [];
+  async updateEstado(input: UpdateEstadoInput): Promise<{ nroSolicitud: number; estado: string }> {
+    this.calls.push(input);
+    // Mismo shape que el POST real a /api/autocheck/estado/actualizar (PascalCase de AutoCheck).
+    const payload: Record<string, unknown> = { NroSolicitud: input.nroSolicitud, Estado: input.estado };
+    if (input.linkResultado) payload["LinkResultado"] = input.linkResultado;
+    if (input.observaciones) payload["Observaciones"] = input.observaciones;
+    console.log(`[ml-notify] (log-mode) payload que se enviaría a ML: ${JSON.stringify(payload)}`);
+    return { nroSolicitud: input.nroSolicitud, estado: input.estado };
+  }
+}
+
 interface AuthResponse {
   Status?: string;
   Token?: string;

@@ -25,6 +25,12 @@ export const dealEstadoHandler: RequestHandler = asyncHandler<AuthedRequest>(asy
   const correlationId = req.correlationId ?? "";
   const outcome = await notifyEstadoChange(parsed.data, { mlCenter: container.mlCenter });
 
+  // Modo inspección (CARDOC_ML_MODE=log): loggea lo que LLEGÓ + la decisión (cubre también los
+  // 'skipped'/'invalid' que no llegan al adapter). El payload real a ML lo loggea LoggingMlCenterClient.
+  if (process.env["CARDOC_ML_MODE"] === "log") {
+    console.log(`[ml-notify] (log-mode) inbound /deal-estado ${JSON.stringify(parsed.data)} -> outcome=${outcome.status}`);
+  }
+
   switch (outcome.status) {
     case "sent":
       res.status(200).json({ status: "sent", estado: outcome.estado, correlationId });
