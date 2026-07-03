@@ -35,7 +35,7 @@ Respuestas: `200 {status:"sent"|"skipped"}`, `422 UNPROCESSABLE` (FINALIZADO sin
 ## Función
 
 ```js
-string button.ml_notificar_estado_oportunidad1(String dealId)
+string button.ml_notificar_estado_oportunidad(String dealId)
 {
 	// ── Config ───────────────────────────────────────────────────────────
 	// Dev. Para prod cambiar por el dominio del entorno de producción.
