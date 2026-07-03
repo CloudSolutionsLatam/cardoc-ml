@@ -53,12 +53,14 @@ function toIsoDate(value: string, fallback: string): string {
  * - NombreCliente ← `cliente.nombre` (fallback "Cliente").
  * - IDInterno ← `reportCode` (hoy "#R-12345"; PENDIENTE que el backend exponga el "INFREV-xxxx"
  *   del CRM en el detalle — ver OQ). Fallback al `id` de la URL.
- * - Fecha ← `fechaInspeccion` normalizada a ISO (fallback "sin-fecha").
+ * - Fecha ← `fechaInspeccion` normalizada a ISO; si no viene o no parsea, `fallbackDate` (el adapter
+ *   Creator pasa la fecha de generación mientras la Custom API no devuelva `inspector.fecha`; default
+ *   "sin-fecha").
  */
-export function buildReportFilename(informe: InformeReport, fallbackId: string): string {
+export function buildReportFilename(informe: InformeReport, fallbackId: string, fallbackDate = "sin-fecha"): string {
   const cliente = sanitizeFilenamePart(informe.cliente?.nombre ?? "", "Cliente");
   const idInterno = sanitizeFilenamePart(informe.reportCode ?? "", sanitizeFilenamePart(fallbackId, "informe"));
-  const fecha = toIsoDate(informe.fechaInspeccion ?? "", "sin-fecha");
+  const fecha = toIsoDate(informe.fechaInspeccion ?? "", fallbackDate);
   return `${cliente}_${idInterno}_${fecha}.pdf`;
 }
 
@@ -241,7 +243,9 @@ export class ZohoCreatorReportsSource implements ReportsSource {
     return {
       stream: Readable.from(Buffer.from(bytes)),
       contentType: "application/pdf",
-      filename: buildReportFilename(informe, id),
+      // Fallback de fecha del nombre: hoy la Custom API no devuelve `inspector.fecha` fiable
+      // (pendiente en el Deluge, junto con motor/transmisión) → usamos la fecha de GENERACIÓN.
+      filename: buildReportFilename(informe, id, toIsoDate(this.deps.generatedAt ?? "", "sin-fecha")),
     };
   }
 }

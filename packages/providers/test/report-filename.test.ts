@@ -30,8 +30,14 @@ describe("buildReportFilename", () => {
     expect(buildReportFilename(informe({ fechaInspeccion: "2026-06-15" }), "1")).toContain("_2026-06-15.pdf");
   });
 
-  it("fecha no parseable → 'sin-fecha'", () => {
+  it("fecha no parseable → 'sin-fecha' (sin fallbackDate)", () => {
     expect(buildReportFilename(informe({ fechaInspeccion: "ayer" }), "1")).toContain("_sin-fecha.pdf");
+  });
+
+  it("fecha ausente/no parseable + fallbackDate → usa el fallback (p. ej. fecha de generación)", () => {
+    expect(buildReportFilename(informe({ fechaInspeccion: "" }), "1", "2026-07-01")).toContain("_2026-07-01.pdf");
+    // Una fecha propia válida SIEMPRE gana sobre el fallback.
+    expect(buildReportFilename(informe({ fechaInspeccion: "20/06/2026" }), "1", "2026-07-01")).toContain("_2026-06-20.pdf");
   });
 
   it("cliente vacío → 'Cliente'; reportCode vacío → cae al id (sanitizado)", () => {

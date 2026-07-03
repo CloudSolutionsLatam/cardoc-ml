@@ -51,6 +51,16 @@ describe("ZohoCreatorReportsSource.openPdf", () => {
     await expect(PDFDocument.load(body)).resolves.toBeDefined();
   });
 
+  it("nombre del PDF: sin inspector.fecha usa la fecha de generación como fallback", async () => {
+    const fetchReportDetail: ReportDetailFetcher = async () => ({
+      code: 3000,
+      result: { ...sampleResult, inspector: { name: "Ana" }, portalType: "ml" }, // sin `fecha`
+    });
+    const src = new ZohoCreatorReportsSource({ fetchReportDetail, generatedAt: "01/07/2026, 09:56 a. m." });
+    const pdf = await src.openPdf("acc_ml", "4837888000004307360");
+    expect(pdf.filename).toContain("_2026-07-01.pdf"); // fecha de generación, no "sin-fecha"
+  });
+
   it("result sin portalType (back-compat R3) → se permite", async () => {
     const pdf = await source({ code: 3000, result: sampleResult }).openPdf("acc_ml", "#R-1");
     expect((await drain(pdf.stream)).toString("utf8").slice(0, 5)).toBe("%PDF-");

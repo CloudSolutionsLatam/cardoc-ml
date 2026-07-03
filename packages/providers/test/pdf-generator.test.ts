@@ -4,7 +4,7 @@
  * saltos de línea), score=0 válido, e informe vacío. No asserta bytes exactos.
  */
 import { describe, expect, it } from "vitest";
-import { PDFDocument, StandardFonts } from "pdf-lib";
+import { PDFDocument, StandardFonts, PDFArray, PDFRawStream, PDFRef, decodePDFRawStream } from "pdf-lib";
 import type { InformeReport, ReportDetalle } from "@cardoc/domain";
 import { capLines, hardBreak, PdfLibReportGenerator, wrapText } from "../src/pdf-generator";
 
@@ -84,13 +84,47 @@ describe("PdfLibReportGenerator — informe completo", () => {
     expect(doc.getPageCount()).toBeGreaterThan(1);
   });
 
-  it("embebe fotos (fetch→embed, PNG original) y las pagina grandes (~2/página)", async () => {
+  it("embebe fotos (fetch→embed, PNG original) y genera PDF válido", async () => {
     const png = new Uint8Array(TINY_PNG);
     const g = new PdfLibReportGenerator({ generatedAt: "t", fetchImage: async () => png });
     const bytes = await g.generate(report({ detalles: [detalle({ imagenes: ["a", "b", "c"] })] }));
     const doc = await PDFDocument.load(bytes);
-    // 3 fotos grandes (~2/página) empujan a varias hojas.
+    // 3 fotos → 2 filas; embebidas dentro de la tarjeta (cover + contenido ⇒ >= 2 páginas).
     expect(doc.getPageCount()).toBeGreaterThan(1);
+    expect(imagePlacements(doc).filter((im) => im.page > 0)).toHaveLength(3);
+  });
+});
+
+describe("PdfLibReportGenerator — fotos 2 por fila dentro de la tarjeta", () => {
+  const png = new Uint8Array(TINY_PNG); // 8x8 cuadrada → w == h al mostrarse
+  const g = new PdfLibReportGenerator({ generatedAt: "t", fetchImage: async () => png });
+
+  it("dibuja 2 fotos lado a lado (misma fila, 2 columnas a ~mitad de ancho)", async () => {
+    const doc = await PDFDocument.load(
+      await g.generate(report({ detalles: [detalle({ imagenes: ["a", "b"], nota: null, aiSummary: null })] })),
+    );
+    const imgs = imagePlacements(doc).filter((im) => im.page > 0); // excluye el logo de la portada
+    expect(imgs).toHaveLength(2);
+    const [left, right] = [...imgs].sort((p, q) => p.x - q.x);
+    expect(left.page).toBe(right.page); // misma página
+    expect(Math.abs(left.y - right.y)).toBeLessThan(0.5); // misma fila (misma y)
+    expect(right.x).toBeGreaterThan(left.x + left.w * 0.9); // 2ª foto a la derecha de la 1ª (2 columnas)
+    // Cada foto ocupa ~mitad del ancho de contenido (no una foto gigante a ancho completo).
+    expect(left.w).toBeLessThan(300);
+    expect(left.w).toBeGreaterThan(200);
+  });
+
+  it("una tarjeta con muchas fotos se pagina por segmentos (la tarjeta abarca > 1 página)", async () => {
+    const doc = await PDFDocument.load(
+      await g.generate(
+        report({
+          detalles: [detalle({ imagenes: ["a", "b", "c", "d", "e", "f"], descripcion: "detalle ".repeat(60), aiSummary: "diag ".repeat(60) })],
+        }),
+      ),
+    );
+    const imgs = imagePlacements(doc).filter((im) => im.page > 0);
+    expect(imgs).toHaveLength(6); // 6 fotos = 3 filas de 2
+    expect(new Set(imgs.map((im) => im.page)).size).toBeGreaterThan(1); // el bloque de fotos paginó
   });
 });
 
@@ -125,6 +159,104 @@ describe("PdfLibReportGenerator — robustez a datos de terceros", () => {
       },
     });
     await expect(PDFDocument.load(await g3.generate(withPhotos))).resolves.toBeDefined();
+  });
+});
+
+// ── Extracción estructural del PDF (sin rasterizador): operadores de una página ────────────────
+/** Stream de operadores (descomprimido) de una página. */
+function pageContent(doc: PDFDocument, pageIndex: number): string {
+  const raw = doc.getPages()[pageIndex].node.Contents() as unknown;
+  if (!raw) return "";
+  const resolved = raw instanceof PDFRef ? doc.context.lookup(raw) : raw;
+  const items = resolved instanceof PDFArray ? resolved.asArray() : [resolved];
+  let ops = "";
+  for (const item of items) {
+    const s = item instanceof PDFRef ? doc.context.lookup(item) : item;
+    if (s instanceof PDFRawStream) ops += Buffer.from(decodePDFRawStream(s).decode()).toString("latin1");
+  }
+  return ops;
+}
+
+/** Texto de una página: pdf-lib lo dibuja como hex-strings (`<4D41..> Tj`); los decodificamos. */
+function pageText(doc: PDFDocument, pageIndex: number): string {
+  return (pageContent(doc, pageIndex).match(/<([0-9A-Fa-f]+)>/g) ?? [])
+    .map((tok) => {
+      const hex = tok.slice(1, -1);
+      let out = "";
+      for (let i = 0; i + 1 < hex.length; i += 2) out += String.fromCharCode(parseInt(hex.slice(i, i + 2), 16));
+      return out;
+    })
+    .join("\n");
+}
+
+/** Índice de la primera página cuyo texto contiene `marker`, o -1. */
+function pageOf(doc: PDFDocument, marker: string): number {
+  for (let i = 0; i < doc.getPageCount(); i++) if (pageText(doc, i).includes(marker)) return i;
+  return -1;
+}
+
+/** Imágenes colocadas: pdf-lib emite `... tx ty cm` (posición) + `w 0 0 h 0 0 cm` (tamaño) antes de `Do`. */
+function imagePlacements(doc: PDFDocument): Array<{ page: number; x: number; y: number; w: number; h: number }> {
+  const re = /1 0 0 1 (-?[\d.]+) (-?[\d.]+) cm\s*1 0 0 1 0 0 cm\s*(-?[\d.]+) 0 0 (-?[\d.]+) 0 0 cm\s*1 0 0 1 0 0 cm\s*\/[\w-]+ Do/g;
+  const out: Array<{ page: number; x: number; y: number; w: number; h: number }> = [];
+  for (let i = 0; i < doc.getPageCount(); i++) {
+    const ops = pageContent(doc, i);
+    re.lastIndex = 0;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(ops))) out.push({ page: i, x: +m[1], y: +m[2], w: +m[3], h: +m[4] });
+  }
+  return out;
+}
+
+describe("PdfLibReportGenerator — keep-with-next (título + primer componente)", () => {
+  it("el título de sección arranca en la MISMA página que su primer componente (no huérfano al pie)", async () => {
+    // Bloque largo → tarjetas ALTAS. La sección 1 baja el cursor y el primer componente de la
+    // sección 2 (desc + nota + diagnóstico, casi media página) no entra junto al título al pie.
+    const big = "Diagnostico detallado del componente con mucho texto de relleno. ".repeat(40);
+    const detalles: ReportDetalle[] = [
+      detalle({ id: 1, seccionId: 1, tituloJerarquico: "SECCIONUNOCOMP relleno", descripcion: big, aiSummary: null, nota: null, imagenes: [] }),
+      detalle({ id: 2, seccionId: 2, tituloJerarquico: "COMPONENTEUNO alto", descripcion: big, aiSummary: big, nota: "Nota extensa del inspector con varias lineas de detalle tecnico. ".repeat(8), imagenes: [] }),
+    ];
+    const bytes = await gen.generate(
+      report({
+        resumenTranscripcion: null,
+        recomendaciones: null,
+        score: null,
+        secciones: [
+          { id: 1, titulo: "SECCIONUNO", completada: true, activa: true },
+          { id: 2, titulo: "SECCIONDOS", completada: true, activa: true },
+        ],
+        detalles,
+      }),
+    );
+    const doc = await PDFDocument.load(bytes);
+    const pTitulo = pageOf(doc, "SECCIONDOS");
+    const pComp = pageOf(doc, "COMPONENTEUNO");
+    expect(pTitulo).toBeGreaterThanOrEqual(0);
+    expect(pComp).toBe(pTitulo); // keep-with-next: título y primer componente en la misma página
+    expect(pTitulo).toBeGreaterThan(pageOf(doc, "SECCIONUNO")); // hubo salto real: se ejercita el caso huérfano
+  });
+
+  it("el título de Puntaje/Resumen no queda huérfano de su bloque (keep-with-next también en summary/score)", async () => {
+    // Un resumen largo empuja el título "Puntaje Técnico" cerca del pie de página.
+    const resumenLargo = `palabra `.repeat(300);
+    const bytes = await gen.generate(
+      report({
+        resumenTranscripcion: resumenLargo,
+        recomendaciones: null,
+        score: 8,
+        score_comentario: "PUNTAJEMARCA comentario del puntaje técnico.",
+        secciones: [],
+        detalles: [],
+      }),
+    );
+    const doc = await PDFDocument.load(bytes);
+    expect(doc.getPageCount()).toBeGreaterThan(1); // el resumen largo pagina: se ejercita el caso huérfano
+    // "Puntaje T" (título completo) evita el falso match con el índice de portada ("...y Puntaje").
+    const pTitulo = pageOf(doc, "Puntaje T");
+    const pBody = pageOf(doc, "PUNTAJEMARCA");
+    expect(pTitulo).toBeGreaterThanOrEqual(0);
+    expect(pBody).toBe(pTitulo); // título y bloque del puntaje en la misma página
   });
 });
 

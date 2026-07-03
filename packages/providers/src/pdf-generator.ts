@@ -10,10 +10,11 @@
  * un cursor con paginación (`Layout`), wrapping de texto y tarjetas medidas. El CSS del portal
  * está a escala 794px = A4; acá los tamaños van directo en puntos (~px × 0.75).
  *
- * Deltas intencionales respecto del portal (documentados): (1) las fotos son EVIDENCIA → se
- * dibujan GRANDES ~2/página en su calidad ORIGINAL (el portal las mete a 2/fila chicas); (2) se
- * agrega un chip de estado por color en cada componente (el portal solo usa el filete lateral),
- * útil para impresión B/N. Todo lo demás sigue la maqueta.
+ * Las fotos son EVIDENCIA: se embeben en su calidad/resolución ORIGINAL (bytes sin recomprimir) y
+ * se muestran a 2 POR FILA dentro de la tarjeta del componente, como el portal (§5.5). El tamaño
+ * MOSTRADO es menor que el original, pero el PDF conserva el detalle (zoom). La salida sigue la
+ * maqueta: título de sección con filete inferior, tarjeta redondeada con filete lateral de color
+ * por estado (border-left) y grilla de fotos 2/fila encerrada en la tarjeta.
  *
  * Las fotos se embeben vía un `ImageFetcher` inyectable (lo provee el adapter Creator con auth de
  * WorkDrive); sin fetcher se anota el conteo como nota (no hay red por defecto).
@@ -45,11 +46,49 @@ export interface PdfGenerator {
   generate(informe: InformeReport): Promise<Uint8Array>;
 }
 
+/** Una fila de la grilla de fotos (2 por fila): sus imágenes con tamaño mostrado y el alto de fila. */
+interface PhotoRow {
+  items: Array<{ img: PDFImage; w: number; h: number }>;
+  h: number;
+}
+
+/**
+ * Layout ya MEDIDO de una tarjeta de componente: todo lo que `drawComponentCard` necesita para
+ * pintar sin recomputar. Se calcula una vez por componente (`computeComponentCard`). `textCardH` es
+ * el alto del bloque de TEXTO encerrado (con padding) — lo usa el lookahead keep-with-next del
+ * `sectionTitle` para no dejar el título huérfano; las FILAS de fotos paginan aparte dentro de la
+ * misma tarjeta (que se dibuja por segmentos si es más alta que una hoja).
+ */
+interface ComponentLayout {
+  d: ReportDetalle;
+  titleLines: string[];
+  descLines: string[];
+  notaLines: string[];
+  diagLines: string[];
+  notes: string[];
+  rows: PhotoRow[];
+  textContentH: number;
+  textCardH: number;
+}
+
+/** Bloque atómico de una tarjeta al paginar: el bloque de texto, o una fila de fotos (con su gap). */
+type CardBlock = { h: number; lead: number; kind: "text" | "row"; row?: PhotoRow };
+
 // ── Geometría (de planning.md §5.5: 794px = A4, padding lateral 48px) ───────────
 const A4 = { w: 595.28, h: 841.89 } as const;
 const MARGIN = 36; // 48px × 0.75 → margen/padding lateral del documento
 const CONTENT_W = A4.w - 2 * MARGIN;
 const BOTTOM = 48; // margen inferior
+const SECTION_TITLE_H = 46; // alto que consume sectionTitle: 14 (gap) + 20 (texto) + 12 (filete)
+// ── Tarjeta de componente (de §5.5: .pdf-component padding 14/16px, border-radius 6px, fotos 2/fila) ──
+const CARD_PAD_X = 12; // 16px × 0.75 — padding lateral de la tarjeta
+const CARD_PAD_Y = 12; // padding vertical de la tarjeta
+const CARD_RADIUS = 4.5; // border-radius 6px × 0.75
+const PHOTO_COL_GAP = 6; // gap 8px entre las 2 columnas de fotos
+const PHOTO_ROW_GAP = 6; // gap 8px entre filas de fotos
+const GAP_TEXT_PHOTOS = 8; // margin-top 10px del bloque de fotos respecto del texto
+const MAX_PHOTO_H = 420; // tope de alto por foto (una foto vertical no puede superar la hoja)
+const PHOTO_W = (CONTENT_W - 2 * CARD_PAD_X - PHOTO_COL_GAP) / 2; // ancho de cada foto: 2 por fila
 const MAX_PHOTOS = 6; // tope de fotos por componente (portal: .slice(0,6))
 const IMAGE_CONCURRENCY = 8; // descargas de fotos en paralelo (tope; la red es el cuello de botella)
 // Las fotos son EVIDENCIA de inspección (motores, detalles finos): se embeben en su calidad/resolución
@@ -80,11 +119,6 @@ const ESTADO_COLOR: Record<EstadoComponente, Color> = {
   aprobado: rgb(0.086, 0.639, 0.29), // #16a34a
   observacion: rgb(0.851, 0.467, 0.024), // #d97706
   critico: rgb(0.863, 0.149, 0.149), // #dc2626
-};
-const ESTADO_LABEL: Record<EstadoComponente, string> = {
-  aprobado: "Aprobado",
-  observacion: "Observación",
-  critico: "Crítico",
 };
 
 /** ÍNDICE FIJO de la portada (verbatim planning.md §5.5 — NO deriva de los datos, pedido de ML). */
@@ -311,8 +345,11 @@ export class PdfLibReportGenerator implements PdfGenerator {
     for (const seccion of informe.secciones) {
       const detalles = informe.detalles.filter((d) => d.seccionId === seccion.id);
       if (!detalles.length) continue;
-      this.sectionTitle(L, seccion.titulo);
-      for (const d of detalles) this.componentCard(L, d, images);
+      // Medir TODO el bloque de texto de cada tarjeta una sola vez; el título arrastra a su primer
+      // componente (keep-with-next) para no quedar huérfano al pie.
+      const layouts = detalles.map((d) => this.computeComponentCard(L, d, images));
+      this.sectionTitle(L, seccion.titulo, (layouts[0]?.textCardH ?? 0) + 8);
+      for (const layout of layouts) this.drawComponentCard(L, layout);
     }
 
     this.footer(L, informe.reportCode, generadoEn);
@@ -503,9 +540,9 @@ export class PdfLibReportGenerator implements PdfGenerator {
 
   // ── Bloques de resumen / recomendaciones / puntaje ──
   private summaryBlock(L: Layout, title: string, body: string, variant: "default" | "reco" = "default"): void {
-    this.sectionTitle(L, title);
     const lines = wrapText(body, L.reg, 10.5, CONTENT_W - 28);
     const h = 18 + lines.length * 15;
+    this.sectionTitle(L, title, h); // keep-with-next: el título no se separa de su bloque
     L.ensure(h);
     const top = L.y;
     const bg = variant === "reco" ? RECO_BG : SUMMARY_BG;
@@ -521,9 +558,9 @@ export class PdfLibReportGenerator implements PdfGenerator {
   }
 
   private score(L: Layout, score: number, comentario: string): void {
-    this.sectionTitle(L, "Puntaje Técnico");
     const lines = comentario ? wrapText(comentario, L.reg, 10.5, CONTENT_W - 28) : [];
     const h = 42 + lines.length * 15;
+    this.sectionTitle(L, "Puntaje Técnico", h); // keep-with-next: el título no se separa del puntaje
     L.ensure(h);
     const top = L.y;
     L.page.drawRectangle({ x: MARGIN, y: top - h, width: CONTENT_W, height: h, color: SCORE_BG });
@@ -539,8 +576,14 @@ export class PdfLibReportGenerator implements PdfGenerator {
   }
 
   // ── Secciones + tarjetas de componente ──
-  private sectionTitle(L: Layout, titulo: string): void {
-    L.ensure(36);
+  /**
+   * Título de sección (14pt/800 + filete inferior 2px). `keepWithNext` = alto del bloque que va
+   * inmediatamente debajo (p. ej. `layout.h + 8` de la primera tarjeta): si título y bloque no
+   * entran JUNTOS en lo que resta de página, saltamos ANTES del título para no dejarlo huérfano al
+   * pie (keep-with-next). Sin `keepWithNext` solo garantiza que el título entre.
+   */
+  private sectionTitle(L: Layout, titulo: string, keepWithNext = 0): void {
+    if (L.y - (SECTION_TITLE_H + keepWithNext) < BOTTOM) L.newPage();
     L.y -= 14;
     L.text(winAnsiSafe(titulo), MARGIN, L.y - 14, 14, L.bold, SECTION_INK);
     L.y -= 20;
@@ -549,9 +592,14 @@ export class PdfLibReportGenerator implements PdfGenerator {
     L.y -= 12;
   }
 
-  private componentCard(L: Layout, d: ReportDetalle, images: Map<string, PDFImage>): void {
-    const innerW = CONTENT_W - 24;
-    const titleLines = capLines(wrapText(d.tituloJerarquico, L.bold, 11, innerW - 72), 4);
+  /**
+   * MIDE una tarjeta de componente: wrappea/capa las líneas de texto, arma las `notes` (fotos no
+   * disponibles / audio-video) y la grilla de fotos 2/fila (proporción natural). No dibuja. Devuelve
+   * `textCardH` (alto del bloque de texto encerrado) para el lookahead keep-with-next.
+   */
+  private computeComponentCard(L: Layout, d: ReportDetalle, images: Map<string, PDFImage>): ComponentLayout {
+    const innerW = CONTENT_W - 2 * CARD_PAD_X;
+    const titleLines = capLines(wrapText(d.tituloJerarquico, L.bold, 11, innerW), 4);
     const descLines = d.descripcion ? capLines(wrapText(d.descripcion, L.reg, 10.5, innerW), 14) : [];
     const notaLines = d.nota ? capLines(wrapText(d.nota, L.reg, 10.5, innerW - 92), 4) : [];
     const diagLines = d.aiSummary ? capLines(wrapText(d.aiSummary, L.reg, 10.5, innerW), 14) : [];
@@ -559,7 +607,6 @@ export class PdfLibReportGenerator implements PdfGenerator {
     const loaded = photos.map((u) => images.get(u)).filter((x): x is PDFImage => x !== undefined);
     const hasMedia = d.audioData.length > 0 || d.videoData.length > 0;
 
-    // ── Bloque de TEXTO (tarjeta con borde de color por estado). Las fotos van APARTE, grandes. ──
     const notes: string[] = [];
     if (loaded.length === 0 && photos.length) notes.push(`${photos.length} foto(s) no disponibles`);
     if (hasMedia) {
@@ -568,74 +615,170 @@ export class PdfLibReportGenerator implements PdfGenerator {
       if (d.videoData.length) parts.push(`${d.videoData.length} video(s)`);
       notes.push(`${parts.join(" - ")} — disponible(s) en la versión digital`);
     }
-    const h =
-      12 + Math.max(15, titleLines.length * 15) +
-      descLines.length * 14 +
-      (notaLines.length ? 6 + notaLines.length * 13 : 0) +
-      (diagLines.length ? 4 + diagLines.length * 14 : 0) +
-      (notes.length ? 16 : 0) +
-      12;
 
-    L.ensure(h + 8);
-    const top = L.y;
-    const color = ESTADO_COLOR[d.estado];
-    L.page.drawRectangle({ x: MARGIN, y: top - h, width: CONTENT_W, height: h, borderColor: BORDER, borderWidth: 0.8, color: WHITE });
-    // Filete lateral de estado (border-left 4px).
-    L.page.drawRectangle({ x: MARGIN, y: top - h, width: 3, height: h, color });
+    // Alto del CONTENIDO de texto (sin padding de tarjeta): título + descripción + nota + diagnóstico + notas.
+    let textContentH = titleLines.length * 15;
+    textContentH += descLines.length * 14;
+    if (notaLines.length) textContentH += 6 + notaLines.length * 13;
+    if (diagLines.length) textContentH += 4 + diagLines.length * 14;
+    if (notes.length) textContentH += 4 + 11;
 
-    let cy = top - 18;
-    const x = MARGIN + 12;
+    // Grilla de fotos 2/fila: cada foto a mitad de ancho, proporción natural (tope de alto por foto).
+    const rows: PhotoRow[] = [];
+    for (let i = 0; i < loaded.length; i += 2) {
+      const items = loaded.slice(i, i + 2).map((img) => {
+        const { width, height } = img.size();
+        let w = PHOTO_W;
+        let h = height * (PHOTO_W / width);
+        if (h > MAX_PHOTO_H) {
+          w *= MAX_PHOTO_H / h;
+          h = MAX_PHOTO_H;
+        }
+        return { img, w, h };
+      });
+      rows.push({ items, h: Math.max(...items.map((it) => it.h)) });
+    }
+
+    return { d, titleLines, descLines, notaLines, diagLines, notes, rows, textContentH, textCardH: 2 * CARD_PAD_Y + textContentH };
+  }
+
+  /**
+   * Dibuja una tarjeta ya medida: texto + grilla de fotos 2/fila, encerrados por un borde redondeado
+   * con filete lateral de color por estado. Si la tarjeta es más alta que la hoja, se pagina por
+   * SEGMENTOS (el bloque de texto y cada fila de fotos son atómicos), y el borde se redondea solo en
+   * el arranque (arriba) y el cierre (abajo) del recorrido, como haría el navegador con `break-inside`.
+   */
+  private drawComponentCard(L: Layout, layout: ComponentLayout): void {
+    const color = ESTADO_COLOR[layout.d.estado];
+
+    const blocks: CardBlock[] = [{ h: layout.textContentH, lead: 0, kind: "text" }];
+    layout.rows.forEach((row, j) => {
+      const lead = j === 0 ? GAP_TEXT_PHOTOS : PHOTO_ROW_GAP;
+      blocks.push({ h: lead + row.h, lead, kind: "row", row });
+    });
+
+    // Si el bloque de texto no entra en lo que resta de página, saltar ANTES de abrir la tarjeta
+    // (keep-with-next ya lo garantiza tras un título de sección; esto cubre cualquier otro caso).
+    if (L.y - (2 * CARD_PAD_Y + layout.textContentH) < BOTTOM) L.newPage();
+
+    let bi = 0;
+    let segTop = L.y;
+    let segBottom = segTop;
+    while (bi < blocks.length) {
+      const contentTop = segTop - CARD_PAD_Y;
+      let y = contentTop;
+      const first = bi;
+      // Llenar el segmento con los bloques que entren (siempre al menos uno).
+      while (bi < blocks.length) {
+        const b = blocks[bi] as CardBlock;
+        const nextBottom = y - b.h;
+        if (bi > first && nextBottom - CARD_PAD_Y < BOTTOM) break;
+        y = nextBottom;
+        bi += 1;
+      }
+      segBottom = y - CARD_PAD_Y;
+      const segH = segTop - segBottom;
+      const isFirst = first === 0;
+      const isLast = bi === blocks.length;
+
+      // Fondo + borde redondeado (según arranque/cierre) + filete lateral de estado.
+      L.page.drawSvgPath(this.cardSegmentPath(CONTENT_W, segH, CARD_RADIUS, isFirst, isLast), {
+        x: MARGIN,
+        y: segTop,
+        color: WHITE,
+        borderColor: BORDER,
+        borderWidth: 0.8,
+      });
+      const topInset = isFirst ? CARD_RADIUS : 0;
+      const botInset = isLast ? CARD_RADIUS : 0;
+      if (segH - topInset - botInset > 0) {
+        L.page.drawRectangle({ x: MARGIN + 0.4, y: segBottom + botInset, width: 3, height: segH - topInset - botInset, color });
+      }
+
+      // Contenido del segmento.
+      let dy = contentTop;
+      for (let k = first; k < bi; k += 1) {
+        const b = blocks[k] as CardBlock;
+        if (b.kind === "text") this.drawCardText(L, dy, layout);
+        else if (b.row) this.drawPhotoRow(L, dy - b.lead, b.row);
+        dy -= b.h;
+      }
+
+      if (bi < blocks.length) {
+        L.newPage();
+        segTop = L.y;
+      }
+    }
+    L.y = segBottom - 8;
+  }
+
+  /** Dibuja el bloque de texto de la tarjeta (título jerárquico + descripción + nota + diagnóstico + notas). */
+  private drawCardText(L: Layout, contentTop: number, layout: ComponentLayout): void {
+    const { titleLines, descLines, notaLines, diagLines, notes } = layout;
+    const x = MARGIN + CARD_PAD_X;
+    let cy = contentTop;
     for (const line of titleLines) {
-      L.text(line, x, cy, 11, L.bold, INK);
+      L.text(line, x, cy - 11, 11, L.bold, INK);
       cy -= 15;
     }
-    // Chip de estado (delta intencional: ayuda a impresión B/N; el portal solo usa el filete).
-    const chip = ESTADO_LABEL[d.estado].toUpperCase();
-    L.text(chip, A4.w - MARGIN - 12 - L.bold.widthOfTextAtSize(chip, 8), top - 17, 8, L.bold, color);
     for (const line of descLines) {
-      L.text(line, x, cy, 10.5, L.reg, DESC);
+      L.text(line, x, cy - 10.5, 10.5, L.reg, DESC);
       cy -= 14;
     }
     if (notaLines.length) {
       cy -= 6;
-      L.text("Nota del inspector:", x, cy, 10.5, L.bold, DESC);
+      L.text("Nota del inspector:", x, cy - 10.5, 10.5, L.bold, DESC);
       const notaX = x + L.bold.widthOfTextAtSize("Nota del inspector: ", 10.5);
       // Primera línea corre a la derecha del label; el resto vuelve al margen del cuerpo.
       notaLines.forEach((line, i) => {
-        L.text(line, i === 0 ? notaX : x, cy, 10.5, L.reg, DESC);
+        L.text(line, i === 0 ? notaX : x, cy - 10.5, 10.5, L.reg, DESC);
         cy -= 13;
       });
     }
     if (diagLines.length) {
       cy -= 4;
       for (const line of diagLines) {
-        L.text(line, x, cy, 10.5, L.reg, DESC);
+        L.text(line, x, cy - 10.5, 10.5, L.reg, DESC);
         cy -= 14;
       }
     }
-    if (notes.length) L.text(this.fit(notes.join("   |   "), L.reg, 8.5, innerW), x, cy - 4, 8.5, L.reg, LABEL);
-    L.y = top - h - 8;
-
-    // ── Fotos GRANDES (~2 por página): fluyen debajo del texto y paginan solas. ──
-    const caption = d.titulo || d.tituloJerarquico;
-    loaded.forEach((img, i) => {
-      const cap = loaded.length > 1 ? `${caption} — foto ${i + 1}/${loaded.length}` : caption;
-      this.drawLargePhoto(L, img, cap);
-    });
+    if (notes.length) {
+      cy -= 4;
+      L.text(this.fit(notes.join("   |   "), L.reg, 8.5, CONTENT_W - 2 * CARD_PAD_X), x, cy - 8.5, 8.5, L.reg, LABEL);
+    }
   }
 
-  /** Dibuja una foto GRANDE (hasta ~media página → ~2 por página), centrada, con caption. Pagina sola. */
-  private drawLargePhoto(L: Layout, img: PDFImage, caption: string): void {
-    const maxH = 330; // ~media página útil → dos fotos entran por hoja
-    const { width, height } = img.size();
-    const s = Math.min(CONTENT_W / width, maxH / height);
-    const w = width * s;
-    const hImg = height * s;
-    L.ensure(12 + hImg + 14); // caption + foto + gap; si no entra, salta de página
-    L.text(this.fit(caption, L.reg, 8, CONTENT_W), MARGIN, L.y - 8, 8, L.reg, LABEL);
-    L.y -= 12;
-    L.page.drawImage(img, { x: MARGIN + (CONTENT_W - w) / 2, y: L.y - hImg, width: w, height: hImg });
-    L.y -= hImg + 14;
+  /** Dibuja una fila de fotos (hasta 2), alineadas al tope, cada una con su borde fino (§5.5). */
+  private drawPhotoRow(L: Layout, rowTop: number, row: PhotoRow): void {
+    let px = MARGIN + CARD_PAD_X;
+    for (const it of row.items) {
+      L.page.drawImage(it.img, { x: px, y: rowTop - it.h, width: it.w, height: it.h });
+      L.page.drawRectangle({ x: px, y: rowTop - it.h, width: it.w, height: it.h, borderColor: BORDER, borderWidth: 0.8 });
+      px += PHOTO_W + PHOTO_COL_GAP; // avanza por columna completa (aunque una foto se haya achicado)
+    }
+  }
+
+  /**
+   * Path (coords y-down, ancla superior-izquierda) del rectángulo de un SEGMENTO de tarjeta: redondea
+   * solo las esquinas superiores si `roundTop` y las inferiores si `roundBottom`. Con ambos true
+   * equivale a una tarjeta redondeada completa (caso de una sola página).
+   */
+  private cardSegmentPath(w: number, h: number, r: number, roundTop: boolean, roundBottom: boolean): string {
+    const rr = Math.max(0, Math.min(r, w / 2, h / 2));
+    const rt = roundTop ? rr : 0;
+    const rb = roundBottom ? rr : 0;
+    return [
+      `M ${rt} 0`,
+      `L ${w - rt} 0`,
+      rt ? `Q ${w} 0 ${w} ${rt}` : `L ${w} 0`,
+      `L ${w} ${h - rb}`,
+      rb ? `Q ${w} ${h} ${w - rb} ${h}` : `L ${w} ${h}`,
+      `L ${rb} ${h}`,
+      rb ? `Q 0 ${h} 0 ${h - rb}` : `L 0 ${h}`,
+      `L 0 ${rt}`,
+      rt ? `Q 0 0 ${rt} 0` : `L 0 0`,
+      "Z",
+    ].join(" ");
   }
 
   /**
