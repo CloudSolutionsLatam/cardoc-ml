@@ -1,7 +1,7 @@
 ---
 title: Playbook — Deploy y Rollback (cardoc-ml)
 status: scaffolding
-last_reviewed: 2026-07-02
+last_reviewed: 2026-07-03
 ---
 
 # Deploy y Rollback
@@ -65,6 +65,23 @@ Lo que rompió los primeros deploys y su solución definitiva. **Leer antes de c
 ---
 
 ## 1. Prerequisitos (una sola vez por máquina)
+
+> **Sintaxis de shell (leer primero).** Los comandos de este playbook están en **bash** (Git Bash),
+> que acepta el prefijo inline `NODE_OPTIONS=--use-system-ca <comando>`. En **PowerShell** ese prefijo
+> NO existe (intenta ejecutar `NODE_OPTIONS=...` como comando → "no se reconoce"): hay que setear la
+> variable **aparte** antes de correr el comando.
+>
+> ```powershell
+> # PowerShell — setear una vez por sesión y luego correr los comandos SIN el prefijo:
+> $env:NODE_OPTIONS = "--use-system-ca"
+> pnpm --filter @cardoc/fn-api predeploy
+> cd apps\catalyst
+> catalyst deploy --only functions:api --ignore-scripts
+> # limpiar al terminar (opcional): Remove-Item Env:NODE_OPTIONS
+> ```
+>
+> Alternativa: correr los comandos **tal cual** en **Git Bash** (ahí la forma `NODE_OPTIONS=… comando`
+> del resto del playbook funciona sin cambios).
 
 | Requisito | Valor confirmado | Cómo se verifica |
 |-----------|------------------|------------------|
