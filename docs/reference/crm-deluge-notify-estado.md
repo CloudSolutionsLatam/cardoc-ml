@@ -44,34 +44,50 @@ string button.ml_notificar_estado_oportunidad1(String dealId)
 	//    es solo el fallback de desarrollo). Idealmente en una variable de org.
 	internalSecret = "dev-internal-secret";
 
+	// ── Mapeo Stage (CRM) → Estado (ML) ───────────────────────────────────
+	// ESPEJO de STAGE_TO_ESTADO del backend (packages/application/src/notify-estado-change.ts).
+	// SOLO estos stages notifican a ML; el resto (Nueva Solicitud, Cancelado, …) NO dispara.
+	// ⚠️ Mantener EN SINCRONÍA con el backend si cambian los nombres de stage del pipeline B2B.
+	stageToEstado = Map();
+	stageToEstado.put("Agendado B2B", "COORDINACIÓN");
+	stageToEstado.put("Completado", "FINALIZADO");
+	stageToEstado.put("Cerrado", "FINALIZADO");
+
 	// 1. Traer el Deal para leer Stage + NroSolicitud (EXTERNAL_ID)
 	deal = zoho.crm.getRecordById("Deals", dealId.toLong());
-	stage = ifnull(deal.get("Stage"), "").toString();
+	stage = ifnull(deal.get("Stage"), "").toString().trim();
 	nroSolicitud = ifnull(deal.get("EXTERNAL_ID"), "").toString();
 
+	// 2. ¿Este stage notifica? (gate local: evita llamadas innecesarias)
+	estado = ifnull(stageToEstado.get(stage), "");
+	if(estado == "")
+	{
+		return "skipped: el stage '" + stage + "' no mapea a un Estado de ML (no se notifica).";
+	}
 	// Guard: sin NroSolicitud no hay a quién notificar
 	if(nroSolicitud == "" || nroSolicitud == "null")
 	{
 		return "ERROR: el Deal " + dealId + " no tiene EXTERNAL_ID (NroSolicitud); no se notifica.";
 	}
 
-	// 2. Payload — SOLO los campos del contrato (el endpoint valida con .strict())
+	// 3. Payload — SOLO los campos del contrato (el endpoint valida con .strict()).
+	//    Se envía el STAGE crudo; el backend re-mapea (fuente de verdad única) y valida el invariante.
 	payload = Map();
 	payload.put("nroSolicitud", nroSolicitud.toLong());
 	payload.put("stage", stage);
-	// LinkResultado = endpoint del PDF por NroSolicitud. Solo en estados finalizados
-	// (Completado/Cerrado → FINALIZADO), que es cuando el informe ya existe y ML lo requiere.
-	if(stage == "Completado" || stage == "Cerrado")
+	// LinkResultado (URL del PDF por NroSolicitud) es obligatorio para FINALIZADO —
+	// en Completado/Cerrado el informe ya existe. En COORDINACIÓN todavía no hay PDF.
+	if(estado == "FINALIZADO")
 	{
 		payload.put("linkResultado", baseUrl + "/v1/informes/solicitud/" + nroSolicitud + "/pdf");
 	}
 
-	// 3. Headers — auth por shared-secret
+	// 4. Headers — auth por shared-secret (NO Bearer; Catalyst reserva Authorization)
 	headers = Map();
 	headers.put("x-internal-secret", internalSecret);
 	headers.put("Content-Type", "application/json");
 
-	// 4. POST a Catalyst: /v1/internal/deal-estado
+	// 5. POST a Catalyst: /v1/internal/deal-estado
 	response = invokeurl
 	[
 		url : baseUrl + "/v1/internal/deal-estado"
@@ -80,12 +96,19 @@ string button.ml_notificar_estado_oportunidad1(String dealId)
 		headers : headers
 	];
 
+	// El endpoint responde { status: sent|skipped, ... } (200) o el sobre de error.
 	return response.toString();
 }
 ```
 
 ## Notas de implementación
 
+- **Mapeo local `stageToEstado`** — es un **espejo** del `STAGE_TO_ESTADO` del backend
+  (`packages/application/src/notify-estado-change.ts`). Cumple dos funciones: (1) *gate* — decide
+  qué stages disparan la llamada (los no mapeados devuelven "skipped" local, sin pegarle al endpoint);
+  (2) decide cuándo adjuntar `linkResultado` (solo `FINALIZADO`). El backend **igualmente re-mapea** el
+  `stage` crudo que recibe → es la **fuente de verdad única** y red de seguridad ante llamadas directas.
+  ⚠️ Si cambian los nombres de stage del pipeline B2B, actualizar **ambos** (Deluge + backend).
 - **`parameters : payload.toString()`** — `payload` es un `Map`; `.toString()` produce JSON y,
   junto al header `Content-Type: application/json`, se envía como body JSON crudo (si se pasara
   el `Map` directo, Deluge lo form-encodearía).
