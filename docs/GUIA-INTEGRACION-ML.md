@@ -27,7 +27,7 @@ detrás. Esta guía es tu contrato completo.
         │  ◄─── 201 { nroSolicitud, ... }     │
         │                                     │
   (2)   │  ◄─── POST tu endpoint AutoCheck ── │   te avisa cada cambio de estado
-        │       (COORDINACIÓN / FINALIZADO)   │   (COORDINACIÓN … luego FINALIZADO + link)
+        │   (PENDIENTE/COORDINACIÓN/FINALIZADO)│  (PENDIENTE → COORDINACIÓN → FINALIZADO + link)
         │                                     │
   (3)   │  GET /v1/informes/solicitud/{nro}/pdf ► │   te entrega el PDF del informe
         │  ◄─── 200 application/pdf           │
@@ -271,7 +271,7 @@ descargar PDF = **100**.
 - [ ] Recibiste de Unicorp: `{{BASE_URL}}` confirmada y `{{API_TOKEN}}`.
 - [ ] Le pasaste a Unicorp el `Usuario`/`Password` de `authenticatecardoc` (para las notificaciones).
 - [ ] Tu endpoint AutoCheck `estado/actualizar` está operativo en testing.
-- [ ] Prueba E2E: crear solicitud (§2) → recibir `COORDINACIÓN` y `FINALIZADO` (§3) → bajar el PDF (§4).
+- [ ] Prueba E2E: crear solicitud (§2) → recibir `PENDIENTE`, `COORDINACIÓN` y `FINALIZADO` (§3) → bajar el PDF (§4).
 
 ---
 
