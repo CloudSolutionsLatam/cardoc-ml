@@ -97,14 +97,13 @@ implementado en `STAGE_TO_ESTADO`, `packages/application/src/notify-estado-chang
 
 | Stage B2B | ML `Estado` |
 |---|---|
-| `Nueva Solicitud` | — (inicial, sin notificar) |
+| `Nueva Solicitud` | `PENDIENTE` (inicial; se re-notifica a ML, Nestor 2026-07-03) |
 | `Agendado B2B` | `COORDINACIÓN` |
 | `Completado` / `Cerrado` | `FINALIZADO` (requiere `LinkResultado`) |
 | `Cancelado` | — (terminal; ML no tiene estado de cancelación) |
 
-> ⚠️ Residual (OQ-N6.a): el mapeo asume que la fuente del estado es `Deals.Stage`. Falta
-> confirmar que el workflow del CRM dispara sobre `Deals.Stage` y no sobre
-> `Informes_Revision.Estado` (ver Hallazgo #4). Si fuera lo segundo, cambian las claves del mapa.
+> ✅ Resuelto (OQ-N6.a, Nestor 2026-07-03): el workflow del CRM dispara sobre `Deals.Stage`
+> (no `Informes_Revision.Estado`), así que las claves del mapa son correctas.
 
 ## Hallazgos estructurales (cambian el diseño del adapter)
 
@@ -121,10 +120,9 @@ implementado en `STAGE_TO_ESTADO`, `packages/application/src/notify-estado-chang
    matrícula (+ sucursal) como texto en `nota_agenda` del Deal.
 4. **Estados.** El field-tracker `Historial_de_Estado` trackea
    `Informes_Revision.Estado`, **no** `Deals.Stage`. El **mapeo** de valores ya está confirmado
-   e implementado (OQ-N6.b, ver §Pipeline B2B), pero queda **abierto** cuál es la fuente real
-   del disparo (OQ-N6.a): el `Stage` del Deal o el `Estado` del Informe. El diseño actual asume
-   `Deals.Stage` (consistente con el endpoint `deal-estado`). `Visitas` (custom) tampoco tiene
-   lookup a Deals.
+   e implementado (OQ-N6.b, ver §Pipeline B2B), y la fuente del disparo quedó **confirmada**
+   (OQ-N6.a, Nestor 2026-07-03): es el `Stage` del Deal (`Deals.Stage`), consistente con el
+   endpoint `deal-estado`. `Visitas` (custom) tampoco tiene lookup a Deals.
 
 ## Pendiente de confirmar
 

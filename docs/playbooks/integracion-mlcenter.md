@@ -76,11 +76,10 @@ contra el sandbox de ML (faltan credenciales).
 
 - **[OQ-N6](../OPEN-QUESTIONS.md)** — mapeo `Deal.Stage` (CRM) → `Estado` (ML). **✅ (b) mapeo
   confirmado e implementado** (Nestor 2026-07-01) en `STAGE_TO_ESTADO` (`notify-estado-change.ts`):
-  `Agendado B2B`→`COORDINACIÓN`; `Completado`/`Cerrado`→`FINALIZADO` (requiere `LinkResultado`);
-  `Nueva Solicitud`/`Cancelado`→sin notificar (`skipped`). **Residual 🔴 (a):** falta confirmar la
-  **fuente del disparo** — el field-tracker trackea `Informes_Revision.Estado`, no `Deals.Stage`; el
-  diseño asume `Deals.Stage` (consistente con el endpoint `deal-estado`). Si fuera `Estado`, cambian
-  las claves del mapa.
+  `Nueva Solicitud`→`PENDIENTE` (inicial, se re-notifica; Nestor 2026-07-03); `Agendado B2B`→`COORDINACIÓN`;
+  `Completado`/`Cerrado`→`FINALIZADO` (requiere `LinkResultado`); solo `Cancelado`→sin notificar
+  (`skipped`). **✅ (a) Confirmado (Nestor 2026-07-03):** el workflow del CRM dispara sobre
+  `Deals.Stage` (no `Informes_Revision.Estado`), así que las claves del mapa son correctas.
 - **[OQ-N7](../OPEN-QUESTIONS.md)** — origen del `LinkResultado` (FINALIZADO): ¿el PDF del
   informe (Creator/WorkDrive `pdf_url`) o un link público distinto?
 - **[OQ-P9](../OPEN-QUESTIONS.md)** — credenciales `authenticatecardoc` (Usuario/Password) →
