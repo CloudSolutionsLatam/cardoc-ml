@@ -11,7 +11,7 @@
  * `tsc -b` de la función (include = `src/**`), y vitest no hace type-check.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { PdfNotAvailableError, ReportNotFoundError, UpstreamError } from "@cardoc/providers";
+import { NotImplementedError, PdfNotAvailableError, ReportNotFoundError, UpstreamError } from "@cardoc/providers";
 import type { Scope } from "@cardoc/domain";
 import {
   correlationMiddleware,
@@ -19,6 +19,7 @@ import {
   requireScope,
 } from "../src/middleware/auth";
 import { ApiError, errorMiddleware } from "../src/middleware/errors";
+import { listInformesHandler } from "../src/routes/informes";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -212,5 +213,46 @@ describe("correlationMiddleware", () => {
   it("genera un UUID cuando no viene header", () => {
     const { req } = call(undefined);
     expect(UUID_RE.test(req.correlationId)).toBe(true);
+  });
+});
+
+// ── GET /v1/informes: listado descartado (ADR-0015) → 501 limpio, no 500 ─────────
+
+describe("listInformesHandler — gate del listado descartado", () => {
+  const baseReq = (listByAccount: () => Promise<unknown>): any => ({
+    query: {},
+    correlationId: "corr-test",
+    accountId: "acc_ml",
+    container: { reports: { listByAccount } },
+  });
+
+  it("adapter que lanza NotImplementedError (modo creator) → 501 NOT_IMPLEMENTED (no 500)", async () => {
+    const { next, box } = captureNext();
+    const { res } = fakeRes();
+    listInformesHandler(
+      baseReq(async () => {
+        throw new NotImplementedError("ZohoCreatorReportsSource", "listByAccount");
+      }),
+      res,
+      next,
+    );
+    await new Promise((r) => setTimeout(r, 20));
+    expect(box.arg).toBeInstanceOf(ApiError);
+    const err = box.arg as ApiError;
+    expect(err.httpStatus).toBe(501);
+    expect(err.code).toBe("NOT_IMPLEMENTED");
+  });
+
+  it("modo mock (listByAccount responde) → 200 data[], sin next(err)", async () => {
+    const { next, box } = captureNext();
+    const { res, captured } = fakeRes();
+    listInformesHandler(
+      baseReq(async () => ({ data: [], page: { limit: 20, nextCursor: null, hasMore: false } })),
+      res,
+      next,
+    );
+    await new Promise((r) => setTimeout(r, 20));
+    expect(box.called).toBe(false);
+    expect(captured.status).toBe(200);
   });
 });

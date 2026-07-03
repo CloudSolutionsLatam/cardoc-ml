@@ -7,7 +7,7 @@
 import type { NextFunction, RequestHandler, Response } from "express";
 import { listInformesQuerySchema } from "@cardoc/domain";
 import { listInformes, streamReportPdf, streamReportPdfByNroSolicitud } from "@cardoc/application";
-import type { ReportPdf } from "@cardoc/providers";
+import { NotImplementedError, type ReportPdf } from "@cardoc/providers";
 import type { AuthedRequest } from "../middleware/auth";
 import { ApiError, asyncHandler } from "../middleware/errors";
 
@@ -42,8 +42,17 @@ export const listInformesHandler: RequestHandler = asyncHandler<AuthedRequest>(a
     throw new ApiError(500, "INTERNAL_ERROR", "container/cuenta no resueltos");
   }
 
-  const page = await listInformes(accountId, parsed.data, { reports: container.reports });
-  res.status(200).json({ ...page, correlationId: req.correlationId ?? "" });
+  try {
+    const page = await listInformes(accountId, parsed.data, { reports: container.reports });
+    res.status(200).json({ ...page, correlationId: req.correlationId ?? "" });
+  } catch (e) {
+    // Listado descartado (ADR-0015: ML es push). El adapter real (creator) lanza NotImplementedError:
+    // lo traducimos a un 501 LIMPIO en vez de un 500 genérico. Sigue operativo en modo mock (dev/test).
+    if (e instanceof NotImplementedError) {
+      throw new ApiError(501, "NOT_IMPLEMENTED", "el listado de informes no está disponible en este entorno (ML es push; ver ADR-0015)");
+    }
+    throw e;
+  }
 });
 
 export const streamPdfHandler: RequestHandler = asyncHandler<AuthedRequest>(async (req, res, next): Promise<void> => {

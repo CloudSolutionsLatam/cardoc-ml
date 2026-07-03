@@ -122,6 +122,7 @@ Todos los errores salen en el **sobre único** `{ error: { code, message, correl
 | 409 | `IDEMPOTENCY_CONFLICT` | Mismo `NroSolicitud` reenviado con un payload distinto. `details.nroSolicitud`. |
 | 422 | `UNPROCESSABLE` | Query params fuera de la allowlist en `GET /v1/informes` (`listInformesQuerySchema` es `.strict()`). `details.fields`. |
 | 429 | `CAP_EXCEEDED` | Cap por ventana superado. Headers `Retry-After` + `X-Cap-*`; `details.{ window, limit, retryAfterSeconds }`. |
+| 501 | `NOT_IMPLEMENTED` | `GET /v1/informes` en modo Creator: el listado por pull está descartado (ADR-0015; ML es push). Gateado limpio, no un 500. |
 | 502 | `UPSTREAM_ERROR` | Fallo del sistema upstream (CRM / Creator / WorkDrive), o el stream del PDF falla **antes del primer byte**. `details.upstream` = etiqueta opaca (`crm` \| `creator` \| `workdrive`). |
 | 500 | `INTERNAL_ERROR` | Error no controlado o `container init failed`. Sin detalle interno. |
 
@@ -474,7 +475,8 @@ Cualquier parámetro fuera de esta lista (p. ej. un filtro de Cuenta como `accou
 | 403 | `FORBIDDEN_SCOPE` | El token no incluye `reports:read`. `auth.ts:88-96` |
 | 429 | `CAP_EXCEEDED` | Cap `informes-list` superado. Devuelve `Retry-After` y `X-Cap-Window`/`X-Cap-Limit`/`X-Cap-Remaining`. `cap.ts:74-90` |
 | 422 | `UNPROCESSABLE` | Query inválida: param fuera de la allowlist (`.strict()`), `estado` fuera del enum, `limit` no positivo o > 100, **o un filtro de Cuenta**. `routes/informes.ts:31-37` |
-| 500 | `INTERNAL_ERROR` | **Modo Creator**: `listByAccount` lanza `NotImplementedError` (ADR-0015) → `toApiError` cae al default → `INTERNAL_ERROR`. También si `container`/`accountId` no resuelven. `reports-source.ts:215-217`, `errors.ts:48-63`, `routes/informes.ts:41-43` |
+| 501 | `NOT_IMPLEMENTED` | **Modo Creator**: `listByAccount` lanza `NotImplementedError` (ADR-0015: listado por pull descartado) → el handler lo **gatea a un 501 limpio** (`routes/informes.ts:41-50`, `reports-source.ts:215-217`). Solo `MockReportsSource` devuelve datos. |
+| 500 | `INTERNAL_ERROR` | `container`/`accountId` no resueltos tras la cadena de auth (`routes/informes.ts:22-26`). |
 
 ### Secuencia
 
@@ -527,8 +529,9 @@ sequenceDiagram
     H->>UC: listInformes(accountId, query)
     UC->>RS: listByAccount(accountId, query)
     alt modo Creator ZohoCreatorReportsSource
-        RS->>ER: NotImplementedError ADR-0015
-        ER-->>C: 500 INTERNAL_ERROR
+        RS-->>H: NotImplementedError ADR-0015
+        H->>ER: ApiError 501 NOT_IMPLEMENTED (gate)
+        ER-->>C: 501 NOT_IMPLEMENTED
     else modo Mock
         RS-->>UC: Page data y page
         UC-->>H: Page
@@ -541,7 +544,7 @@ sequenceDiagram
 
 - **Tenancy blindada.** El `accountId` lo agrega el backend desde el token (`auth.ts:77-79`) y se pasa como primer argumento del use-case (`list-informes.ts:9-15`); el consumidor nunca elige Cuenta. Como refuerzo, la query usa `.strict()` (`schemas.ts:61-71`): un filtro de Cuenta u otro param desconocido es rechazado con **422 UNPROCESSABLE** en `routes/informes.ts:31-37`.
 - **422, no 400.** La validación de query se hace dentro del handler con `safeParse` y lanza `ApiError(422, "UNPROCESSABLE", ...)` (`routes/informes.ts:33-37`), no `VALIDATION_ERROR`(400). El 400 queda reservado a otros flujos.
-- **En modo Creator, este endpoint no responde 200.** `ZohoCreatorReportsSource.listByAccount` lanza `NotImplementedError` (ADR-0015: el listado por pull se descartó porque ML es push) — `reports-source.ts:215-217`. Ese error no está mapeado en `toApiError`, así que cae al default y sale **500 INTERNAL_ERROR** (`errors.ts:58-63`). **Solo `MockReportsSource` devuelve datos** (`reports-source.ts:80-90`, data de muestra), útil para dev/test.
+- **En modo Creator, este endpoint no responde 200.** `ZohoCreatorReportsSource.listByAccount` lanza `NotImplementedError` (ADR-0015: el listado por pull se descartó porque ML es push) — `reports-source.ts:215-217`. El handler lo **gatea a un `501 NOT_IMPLEMENTED` limpio** (`routes/informes.ts:41-50`), no un `500` genérico. **Solo `MockReportsSource` devuelve datos** (`reports-source.ts:80-90`, data de muestra), útil para dev/test.
 - **Cursor decorativo hoy.** El Mock siempre responde `nextCursor: null`, `hasMore: false` (`reports-source.ts:89`); la paginación real depende de una fuente que aún no existe en modo Creator.
 - **Cap in-memory, no distribuido.** Los contadores del cap viven por contenedor caliente; el blueprint pide Catalyst Cache (TTL + increment atómico) antes de producción — `cap.ts:6-9`. El cap se evalúa **después** de auth + scope (401/403 no consumen cap), `cap.ts:2-3`.
 - **Auditoría on-finish.** `auditOnFinish` escribe exactamente 1 fila en `audit_log` al evento `finish` con `correlationId`/`consumerId`/`accountId`/`endpoint`/`outcome`/`httpStatus`/`latencyMs`/`errorCode`; **nunca** payload ni PII (`audit.ts:13-37`). El `endpoint` lógico lo fija el middleware de cap (`informes-list`, `cap.ts:36`).
