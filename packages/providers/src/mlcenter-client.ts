@@ -6,14 +6,14 @@
  * Contrato (doc API AutoCheck v1.0):
  *  - Auth: POST {base}/api/login/authenticatecardoc { Usuario, Password } -> { Status, Token } (JWT, 1h).
  *  - POST {base}/api/autocheck/estado/actualizar (Bearer) { NroSolicitud, Estado, LinkResultado?, Observaciones? }.
- *  - Estados: COORDINACIÓN -> FINALIZADO (terminal). LinkResultado obligatorio en FINALIZADO.
+ *  - Estados: PENDIENTE (inicial) -> COORDINACIÓN -> FINALIZADO (terminal). LinkResultado obligatorio en FINALIZADO.
  *
  * Es el ÚNICO lugar (junto al resto de providers) autorizado a HTTP externo.
  */
 import { UpstreamError } from "./errors";
 
-/** Estados que cardoc emite hacia ML (PENDIENTE es el inicial del lado de ML). */
-export type MlEstado = "COORDINACIÓN" | "FINALIZADO";
+/** Estados que cardoc emite hacia ML. PENDIENTE = inicial (Deal en "Nueva Solicitud"). */
+export type MlEstado = "PENDIENTE" | "COORDINACIÓN" | "FINALIZADO";
 
 export interface MlCenterConfig {
   /** Base del API, p.ej. https://www.mlcenter.com.uy/apimiauto (prod) o .../ApiMiAutoTesting (testing). */

@@ -28,8 +28,8 @@ describe("mapStageToEstado — pipeline B2B (OQ-N6)", () => {
   it("Cerrado → FINALIZADO", () => {
     expect(mapStageToEstado("Cerrado")).toBe("FINALIZADO");
   });
-  it("Nueva Solicitud → null (inicial, no se notifica)", () => {
-    expect(mapStageToEstado("Nueva Solicitud")).toBeNull();
+  it("Nueva Solicitud → PENDIENTE (inicial)", () => {
+    expect(mapStageToEstado("Nueva Solicitud")).toBe("PENDIENTE");
   });
   it("Cancelado → null (terminal, ML no tiene cancelación)", () => {
     expect(mapStageToEstado("Cancelado")).toBeNull();
@@ -44,28 +44,33 @@ describe("mapStageToEstado — pipeline B2B (OQ-N6)", () => {
     expect(mapStageToEstado("agendado b2b")).toBeNull();
   });
 
-  it("de los 5 stages B2B conocidos, exactamente 3 notifican; el mapa no tiene claves de más/menos", () => {
+  it("de los 5 stages B2B conocidos, 4 notifican (solo 'Cancelado' no); el mapa no tiene claves de más/menos", () => {
     // Guarda de REGRESIÓN sobre el mapa (no de descubrimiento): B2B_STAGES es la foto de
     // settings/pipeline al 30/06 congelada acá. OJO: NO detecta un stage NUEVO agregado en Zoho
     // (esa lista vive en la consola, no en el código) — eso se revisa manualmente contra el
     // pipeline. Lo que sí atrapa: que alguien agregue/saque/renombre una clave de STAGE_TO_ESTADO.
     const B2B_STAGES = ["Nueva Solicitud", "Agendado B2B", "Completado", "Cerrado", "Cancelado"];
     const NOTIFICABLES = B2B_STAGES.filter((s) => mapStageToEstado(s) !== null);
-    expect(NOTIFICABLES.sort()).toEqual(["Agendado B2B", "Cerrado", "Completado"]);
-    expect(Object.keys(STAGE_TO_ESTADO).sort()).toEqual(["Agendado B2B", "Cerrado", "Completado"]);
+    expect(NOTIFICABLES.sort()).toEqual(["Agendado B2B", "Cerrado", "Completado", "Nueva Solicitud"]);
+    expect(Object.keys(STAGE_TO_ESTADO).sort()).toEqual(["Agendado B2B", "Cerrado", "Completado", "Nueva Solicitud"]);
   });
 });
 
 // ── Use-case notifyEstadoChange ─────────────────────────────────────────────────
 
 describe("notifyEstadoChange (outbound a ML)", () => {
-  it("skip en los stages no-notificables ('Nueva Solicitud' y 'Cancelado') — no llama a ML", async () => {
-    for (const stage of ["Nueva Solicitud", "Cancelado"]) {
-      const ml = new MockMlCenterClient();
-      const out = await notifyEstadoChange({ nroSolicitud: 908812, stage }, { mlCenter: ml });
-      expect(out.status).toBe("skipped");
-      expect(ml.calls).toHaveLength(0);
-    }
+  it("skip solo en 'Cancelado' (no-notificable) — no llama a ML", async () => {
+    const ml = new MockMlCenterClient();
+    const out = await notifyEstadoChange({ nroSolicitud: 908812, stage: "Cancelado" }, { mlCenter: ml });
+    expect(out.status).toBe("skipped");
+    expect(ml.calls).toHaveLength(0);
+  });
+
+  it("envía PENDIENTE en 'Nueva Solicitud' (inicial, sin LinkResultado)", async () => {
+    const ml = new MockMlCenterClient();
+    const out = await notifyEstadoChange({ nroSolicitud: 908812, stage: "Nueva Solicitud" }, { mlCenter: ml });
+    expect(out).toEqual({ status: "sent", estado: "PENDIENTE" });
+    expect(ml.calls[0]).toMatchObject({ nroSolicitud: 908812, estado: "PENDIENTE" });
   });
 
   it("envía COORDINACIÓN en 'Agendado B2B'", async () => {

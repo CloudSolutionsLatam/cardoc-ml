@@ -835,10 +835,11 @@ Montaje real (`app.ts:76`): `attachContainer → requireInternalSecret → dealE
 
 | Stage (CRM, pipeline B2B) | Estado ML | Outcome |
 |---|---|---|
+| `Nueva Solicitud` | `PENDIENTE` | `sent` (200) |
 | `Agendado B2B` | `COORDINACIÓN` | `sent` (200) |
 | `Completado` | `FINALIZADO` | `sent` (200) — requiere `linkResultado` |
 | `Cerrado` | `FINALIZADO` | `sent` (200) — requiere `linkResultado` |
-| cualquier otro (`Nueva Solicitud`, `Cancelado`, …) | — (no mapea) | `skipped` (200) |
+| `Cancelado` / otros | — (no mapea) | `skipped` (200) |
 
 ### Response
 
@@ -851,7 +852,7 @@ Montaje real (`app.ts:76`): `attachContainer → requireInternalSecret → dealE
 
 `skipped` (el Stage no mapea a un Estado notificable; **no es error**):
 ```json
-{ "status": "skipped", "reason": "Stage 'Nueva Solicitud' no mapea a un Estado de ML", "correlationId": "..." }
+{ "status": "skipped", "reason": "Stage 'Cancelado' no mapea a un Estado de ML", "correlationId": "..." }
 ```
 
 - **Errores** — sobre único `{ error: { code, message, correlationId, details? } }` (`errorMiddleware`). Solo códigos del `ErrorCode` enum (`errors.ts:13-23`).
@@ -922,11 +923,11 @@ sequenceDiagram
 
 - **Sin scope ni cap.** A diferencia de las 3 rutas públicas, esta ruta se monta solo con `attachContainer, requireInternalSecret` (`app.ts:76`); no pasa por `authMiddleware`, `requireScope` ni `cap`. `consumerId`/`accountId` nunca se setean → en `audit_log` quedan como `"anonymous"`/`""` (`audit.ts:23-24`).
 - **Auditoría igual aplica.** Como `attachContainer` corre antes que `requireInternalSecret`, el container queda adjunto incluso en un 401, por lo que un fallo de secret SÍ se audita. Ojo: `req.endpoint = "internal-deal-estado"` se setea dentro del handler (`internal.ts:15`); si el 401 corta antes, la auditoría registra el fallback `POST /v1/internal/deal-estado` (`audit.ts:25`).
-- **`skipped` es 200, no error.** Stages terminales/iniciales del pipeline B2B (`Nueva Solicitud`, `Cancelado`) no tienen Estado en el contrato AutoCheck y devuelven 200 `skipped` a propósito (`notify-estado-change.ts:16-22`, `:60-61`).
+- **`skipped` es 200, no error.** El stage terminal `Cancelado` no tiene Estado en el contrato AutoCheck y devuelve 200 `skipped` a propósito. (`Nueva Solicitud` mapea a `PENDIENTE` → `sent`.) (`notify-estado-change.ts:16-22`, `:60-61`).
 - **422 vs 502 — decisión de diseño.** `invalid` (invariante de dominio: `FINALIZADO` sin `linkResultado`) nunca contacta a ML → 422; solo una falla REAL del POST a ML es 502. Reintentar contra ML no arregla un payload incompleto (`internal.ts:42-48`, `notify-estado-change.ts:49-53`).
 - **Modo de ejecución `CARDOC_ML_MODE`** (selección del adapter en `container.ts:49-50, 80-88`):
   - `http` → `MlCenterHttpClient`: POST real a AutoCheck. Cachea el JWT ~1h y re-loguea ante 401 (`mlcenter-client.ts:80-131`). Marcado STUB-grade: implementado por doc, aún sin probar contra el sandbox de ML (`mlcenter-client.ts:76-79`).
   - `log` → `LoggingMlCenterClient`: NO llama a ML; loggea por `console.log` el **payload exacto** (PascalCase `NroSolicitud`/`Estado`/`LinkResultado`/`Observaciones`) que se POSTearía, y devuelve éxito (`mlcenter-client.ts:52-63`). Además el handler loggea el inbound + la decisión, cubriendo también `skipped`/`invalid` que no llegan al adapter (`internal.ts:30-32`).
   - cualquier otro valor (incl. sin setear) → `MockMlCenterClient`: registra las llamadas en memoria y devuelve éxito (`mlcenter-client.ts:39-45`).
-- **`Estado` ML tiene tilde.** El enum `MlEstado` es exactamente `"COORDINACIÓN" | "FINALIZADO"` (`mlcenter-client.ts:16`); el mapa lo emite con tilde (`notify-estado-change.ts:25`).
+- **`Estado` ML tiene tilde.** El enum `MlEstado` es exactamente `"PENDIENTE" | "COORDINACIÓN" | "FINALIZADO"` (`mlcenter-client.ts:16`); el mapa lo emite con tilde (`notify-estado-change.ts:25`).
 - **Residual OQ-N6.a** (`notify-estado-change.ts:20-22`): falta confirmar que el workflow dispare sobre `Deals.Stage` y no sobre `Informes_Revision.Estado`; si fuera lo segundo, las claves de `STAGE_TO_ESTADO` cambian por los valores del picklist `Estado`.

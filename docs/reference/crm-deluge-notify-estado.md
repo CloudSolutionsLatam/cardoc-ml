@@ -27,8 +27,9 @@ Contrato (payload, `dealEstadoSchema` `.strict()` — solo estos campos):
 | `linkResultado` | url | Solo si FINALIZADO | URL del PDF del informe = endpoint D3b `/v1/informes/solicitud/{nroSolicitud}/pdf`. |
 | `observaciones` | string (≤500) | No | Texto libre opcional. |
 
-Mapeo que aplica el backend (`STAGE_TO_ESTADO`): `Agendado B2B → COORDINACIÓN`;
-`Completado`/`Cerrado → FINALIZADO` (requiere `linkResultado`); el resto → `skipped` (no notifica).
+Mapeo que aplica el backend (`STAGE_TO_ESTADO`): `Nueva Solicitud → PENDIENTE`;
+`Agendado B2B → COORDINACIÓN`; `Completado`/`Cerrado → FINALIZADO` (requiere `linkResultado`);
+`Cancelado`/otros → `skipped` (no notifica).
 Respuestas: `200 {status:"sent"|"skipped"}`, `422 UNPROCESSABLE` (FINALIZADO sin link),
 `502 UPSTREAM_ERROR` (falla real de ML).
 
@@ -50,6 +51,7 @@ string button.ml_notificar_estado_oportunidad(String dealId)
 	// notifica: el backend re-mapea el stage crudo, decide sent/skipped y lo registra en audit_log.
 	// ⚠️ Mantener EN SINCRONÍA con el backend si cambian los nombres de stage del pipeline B2B.
 	stageToEstado = Map();
+	stageToEstado.put("Nueva Solicitud", "PENDIENTE");
 	stageToEstado.put("Agendado B2B", "COORDINACIÓN");
 	stageToEstado.put("Completado", "FINALIZADO");
 	stageToEstado.put("Cerrado", "FINALIZADO");

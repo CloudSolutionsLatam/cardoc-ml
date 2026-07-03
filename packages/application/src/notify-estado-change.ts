@@ -13,8 +13,9 @@ import type { MlCenterClient, MlEstado } from "@cardoc/providers";
  * (OQ-N6, 2026-07-01) contra `settings/pipeline`; detalle en `docs/reference/crm-data-model.md`.
  * Flujo B2B: `Nueva Solicitud` → `Agendado B2B` → `Completado` → `Cerrado` | `Cancelado`.
  *
- * Solo dos stages notifican a ML; los otros tres NO mapean → `skipped` (no es error):
- *  - `Nueva Solicitud`: estado inicial (ML ya lo conoce, fue quien lo creó) — no se notifica.
+ * Cuatro stages notifican a ML; solo `Cancelado` NO mapea → `skipped` (no es error):
+ *  - `Nueva Solicitud`: estado inicial → `PENDIENTE` (pedido de Nestor 2026-07-03; ML acepta el
+ *    estado inicial que le re-notificamos).
  *  - `Cancelado`: terminal; ML no tiene un estado de cancelación en el contrato AutoCheck.
  *
  * ✅ Confirmado (OQ-N6.a, Nestor 2026-07-03): el workflow del CRM dispara sobre `Deals.Stage`
@@ -22,6 +23,7 @@ import type { MlCenterClient, MlEstado } from "@cardoc/providers";
  * del pipeline B2B— son las correctas.
  */
 export const STAGE_TO_ESTADO: Record<string, MlEstado> = {
+  "Nueva Solicitud": "PENDIENTE",
   "Agendado B2B": "COORDINACIÓN",
   Completado: "FINALIZADO",
   Cerrado: "FINALIZADO",
