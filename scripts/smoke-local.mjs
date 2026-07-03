@@ -85,7 +85,11 @@ check("POST /v1/internal/deal-estado sin secret → 401", r.status === 401, `got
 const INT = { "Content-Type": "application/json", "x-internal-secret": "dev-internal-secret" };
 r = await fetch(`${base}/v1/internal/deal-estado`, { method: "POST", headers: INT, body: JSON.stringify({ nroSolicitud: 908812, stage: "Nueva Solicitud" }) });
 j = await r.json();
-check("POST internal 'Nueva Solicitud' → 200 skipped (stage no notificable)", r.status === 200 && j.status === "skipped", `got ${r.status} ${JSON.stringify(j)}`);
+check("POST internal 'Nueva Solicitud' → 200 sent PENDIENTE", r.status === 200 && j.status === "sent" && j.estado === "PENDIENTE", `got ${r.status} ${JSON.stringify(j)}`);
+
+r = await fetch(`${base}/v1/internal/deal-estado`, { method: "POST", headers: INT, body: JSON.stringify({ nroSolicitud: 908812, stage: "Cancelado" }) });
+j = await r.json();
+check("POST internal 'Cancelado' → 200 skipped (stage no notificable)", r.status === 200 && j.status === "skipped", `got ${r.status} ${JSON.stringify(j)}`);
 
 // Mapeo B2B real (E-07): Agendado B2B → COORDINACIÓN (ML en modo mock).
 r = await fetch(`${base}/v1/internal/deal-estado`, { method: "POST", headers: INT, body: JSON.stringify({ nroSolicitud: 908812, stage: "Agendado B2B" }) });
