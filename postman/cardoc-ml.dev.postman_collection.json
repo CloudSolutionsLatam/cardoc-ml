@@ -1,0 +1,283 @@
+{
+  "info": {
+    "_postman_id": "c17d0c00-ca2d-4c00-b2b0-cardocml0dev1",
+    "name": "cardoc-ml — API v1 (dev)",
+    "description": "Colección para probar la API B2B cardoc-ml contra el entorno **development** de Catalyst.\n\n- **Base URL (dev):** https://ml-909785950.development.catalystserverless.com/server/api\n- **Auth del consumidor:** header propio `X-Api-Key` (NO `Authorization`, que Catalyst reserva para OAuth de Zoho). Está configurada a nivel colección como tipo *API Key* → completá la variable `apiKey`.\n- **Ruta interna:** `POST /v1/internal/deal-estado` usa shared-secret `x-internal-secret` (no `X-Api-Key`).\n- Todas las respuestas de error usan el sobre único `{ error: { code, message, correlationId, details? } }`.\n\nCompletá las variables de la colección (o usá el environment `cardoc-ml.dev`) antes de disparar:\n`apiKey`, `internalSecret`, `nroCedula`, `nroSolicitud`, `informeId`.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "apikey",
+    "apikey": [
+      { "key": "key", "value": "X-Api-Key", "type": "string" },
+      { "key": "value", "value": "{{apiKey}}", "type": "string" },
+      { "key": "in", "value": "header", "type": "string" }
+    ]
+  },
+  "event": [
+    {
+      "listen": "test",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "// Captura el X-Correlation-Id de toda respuesta para trazabilidad / soporte.",
+          "const cid = pm.response.headers.get('X-Correlation-Id');",
+          "if (cid) { pm.collectionVariables.set('lastCorrelationId', cid); }",
+          "",
+          "// Si vino un sobre de error, lo dejamos visible en la consola de Postman.",
+          "try {",
+          "  const ct = pm.response.headers.get('Content-Type') || '';",
+          "  if (ct.includes('application/json')) {",
+          "    const body = pm.response.json();",
+          "    if (body && body.error) {",
+          "      console.log('API error', pm.response.code, body.error.code, '·', body.error.message, '· cid=', body.error.correlationId);",
+          "    }",
+          "  }",
+          "} catch (e) { /* respuesta binaria (PDF) u otra: se ignora */ }"
+        ]
+      }
+    }
+  ],
+  "variable": [
+    { "key": "baseUrl", "value": "https://ml-909785950.development.catalystserverless.com/server/api", "type": "string" },
+    { "key": "apiKey", "value": "", "type": "string", "description": "Token del consumidor (X-Api-Key). Lo provee Unicorp — pegalo acá, NO lo commitees." },
+    { "key": "internalSecret", "value": "dev-internal-secret", "type": "string", "description": "Shared-secret x-internal-secret. En dev el fallback del código es 'dev-internal-secret'; si el deploy tiene INTERNAL_WEBHOOK_SECRET seteado, usá ese valor." },
+    { "key": "nroCedula", "value": "12345678", "type": "string" },
+    { "key": "nroSolicitud", "value": "987654", "type": "string" },
+    { "key": "informeId", "value": "acc_dev-INF-001", "type": "string", "description": "Id interno de Análisis (Creator). 'acc_dev-INF-001' es la semilla del MockReportsSource en modo memory." },
+    { "key": "lastCorrelationId", "value": "", "type": "string", "description": "Se completa solo desde el test de colección con el X-Correlation-Id de la última respuesta." }
+  ],
+  "item": [
+    {
+      "name": "0 · Health",
+      "item": [
+        {
+          "name": "GET /v1/health",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "GET",
+            "header": [
+              { "key": "X-Correlation-Id", "value": "{{$guid}}", "type": "text", "disabled": true }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/health",
+              "host": ["{{baseUrl}}"],
+              "path": ["v1", "health"]
+            },
+            "description": "Health check abierto (sin auth, sin scope, sin cap). Responde siempre 200 { status: 'ok', service: 'api' }. Sirve para verificar que el deploy dev está vivo y devuelve el header X-Correlation-Id."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('body { status:ok, service:api }', () => {",
+                  "  const b = pm.response.json();",
+                  "  pm.expect(b.status).to.eql('ok');",
+                  "  pm.expect(b.service).to.eql('api');",
+                  "});",
+                  "pm.test('devuelve X-Correlation-Id', () => pm.expect(pm.response.headers.get('X-Correlation-Id')).to.be.a('string'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "1 · Oportunidades",
+      "item": [
+        {
+          "name": "POST /v1/opportunity-contact",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json", "type": "text" },
+              { "key": "X-Idempotency-Key", "value": "sol-{{nroSolicitud}}", "type": "text", "description": "Opcional. Activa idempotencia Capa 1 (DataStore). Reenviar la misma key con distinto payload → 409 IDEMPOTENCY_CONFLICT." },
+              { "key": "X-Correlation-Id", "value": "{{$guid}}", "type": "text", "disabled": true }
+            ],
+            "body": {
+              "mode": "raw",
+              "options": { "raw": { "language": "json" } },
+              "raw": "{\n  \"NroCedula\": {{nroCedula}},\n  \"NroSolicitud\": {{nroSolicitud}},\n  \"Nombres\": \"Juan\",\n  \"Apellidos\": \"Pérez\",\n  \"CelularCliente\": \"099123456\",\n  \"Tenant\": \"Automotora Demo\",\n  \"Sucursal\": \"Casa Central\",\n  \"DepartamentoSucursal\": \"Montevideo\",\n  \"CiudadSucursal\": \"Montevideo\",\n  \"DireccionSucursal\": \"Av. Italia 1234\",\n  \"MarcaVehiculo\": \"Volkswagen\",\n  \"ModeloVehiculo\": \"Amarok\",\n  \"AnioVehiculo\": 2018,\n  \"MatriculaVehiculo\": \"ABC1234\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/v1/opportunity-contact",
+              "host": ["{{baseUrl}}"],
+              "path": ["v1", "opportunity-contact"]
+            },
+            "description": "Crea/reutiliza Contacto (dedup por cédula) + crea Oportunidad en stage 'Nueva Solicitud' del pipeline 'B2B' (server-side).\n\n- **Scope:** opportunities:create · **Cap:** opportunity-contact (60/h)\n- **Body:** PascalCase, `.strict()` → cualquier campo desconocido = 400 VALIDATION_ERROR.\n- Obligatorios: NroCedula, NroSolicitud, Nombres, Apellidos. El resto es opcional (van a nota_agenda).\n- La Cuenta (ML) sale SIEMPRE del token, nunca del body (`Tenant` es informativo).\n- **Respuestas:** 201 created · 200 duplicate · 202 in_progress (con X-Idempotency-Key en vuelo)."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('2xx esperado (201/200/202)', () => pm.expect([200,201,202]).to.include(pm.response.code));",
+                  "const b = pm.response.json();",
+                  "pm.test('trae status y nroSolicitud', () => {",
+                  "  pm.expect(b).to.have.property('status');",
+                  "  pm.expect(b).to.have.property('nroSolicitud');",
+                  "});",
+                  "if (b.opportunity && b.opportunity.id) { pm.collectionVariables.set('lastOpportunityId', b.opportunity.id); }"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "2 · Informes",
+      "item": [
+        {
+          "name": "GET /v1/informes (listado)",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "X-Correlation-Id", "value": "{{$guid}}", "type": "text", "disabled": true }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/informes?limit=20",
+              "host": ["{{baseUrl}}"],
+              "path": ["v1", "informes"],
+              "query": [
+                { "key": "limit", "value": "20", "description": "int >0, máx 100. Default 20." },
+                { "key": "estado", "value": "completado", "description": "en_progreso | completado | cerrado", "disabled": true },
+                { "key": "matricula", "value": "ABC1234", "disabled": true },
+                { "key": "desde", "value": "2026-06-01", "disabled": true },
+                { "key": "hasta", "value": "2026-06-30", "disabled": true },
+                { "key": "cursor", "value": "", "description": "Cursor opaco de paginación (page.nextCursor).", "disabled": true }
+              ]
+            },
+            "description": "Lista los Informes de Revisión de la Cuenta autenticada (tenancy desde el token).\n\n- **Scope:** reports:read · **Cap:** informes-list (120/h)\n- **Query allowlist `.strict()`:** cualquier param fuera de la lista (p. ej. un filtro de Cuenta) → 422 UNPROCESSABLE.\n- **OJO — modo Creator:** en el deploy real este endpoint responde **501 NOT_IMPLEMENTED** (ADR-0015: el listado por pull se descartó, ML es push). Solo el MockReportsSource (modo memory) devuelve 200 con datos de muestra."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 (mock) o 501 (Creator)', () => pm.expect([200,501]).to.include(pm.response.code));",
+                  "if (pm.response.code === 200) {",
+                  "  const b = pm.response.json();",
+                  "  pm.test('shape { data[], page, correlationId }', () => {",
+                  "    pm.expect(b.data).to.be.an('array');",
+                  "    pm.expect(b.page).to.be.an('object');",
+                  "    pm.expect(b).to.have.property('correlationId');",
+                  "  });",
+                  "  if (b.data && b.data[0] && b.data[0].id) { pm.collectionVariables.set('informeId', b.data[0].id); console.log('informeId seteado a', b.data[0].id); }",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET /v1/informes/:id/pdf",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "X-Correlation-Id", "value": "{{$guid}}", "type": "text", "disabled": true }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/informes/{{informeId}}/pdf",
+              "host": ["{{baseUrl}}"],
+              "path": ["v1", "informes", "{{informeId}}", "pdf"]
+            },
+            "description": "Stream binario autenticado del PDF del informe por id interno (Creator). Usá 'Send and Download' en Postman para guardar el .pdf.\n\n- **Scope:** reports:pdf · **Cap:** informes-pdf (100/h)\n- Content-Type: application/pdf · Content-Disposition: attachment; filename=\"Cliente_Id_Fecha.pdf\" · Cache-Control: no-store.\n- **Errores:** 404 NOT_FOUND (inexistente / otra Cuenta / otro portal) · 404 PDF_NOT_AVAILABLE · 502 UPSTREAM_ERROR (Creator/WorkDrive)."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "  pm.test('Content-Type application/pdf', () => pm.expect(pm.response.headers.get('Content-Type')).to.include('application/pdf'));",
+                  "  pm.test('Content-Disposition attachment', () => pm.expect(pm.response.headers.get('Content-Disposition') || '').to.include('attachment'));",
+                  "} else {",
+                  "  console.log('PDF no devuelto:', pm.response.code, pm.response.text());",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET /v1/informes/solicitud/:nroSolicitud/pdf",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "X-Correlation-Id", "value": "{{$guid}}", "type": "text", "disabled": true }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/informes/solicitud/{{nroSolicitud}}/pdf",
+              "host": ["{{baseUrl}}"],
+              "path": ["v1", "informes", "solicitud", "{{nroSolicitud}}", "pdf"]
+            },
+            "description": "Variante D3b: resuelve el N.º de Solicitud externo → id de Análisis (vía CRM Informes_Revision) y streamea el PDF. El consumidor nunca ve el id interno de Creator.\n\n- **Scope:** reports:pdf · **Cap:** informes-pdf (100/h)\n- Semilla dev (modo memory): MockCrmClient.seedInformeRevision('1001', 'acc_dev-INF-001') → probá con nroSolicitud=1001.\n- **Errores:** 404 NOT_FOUND si el nroSolicitud no resuelve · 502 UPSTREAM_ERROR (CRM/Creator/WorkDrive)."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "  pm.test('Content-Type application/pdf', () => pm.expect(pm.response.headers.get('Content-Type')).to.include('application/pdf'));",
+                  "} else {",
+                  "  console.log('PDF por solicitud no devuelto:', pm.response.code, pm.response.text());",
+                  "}"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "3 · Interno (CRM → Catalyst)",
+      "item": [
+        {
+          "name": "POST /v1/internal/deal-estado",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json", "type": "text" },
+              { "key": "x-internal-secret", "value": "{{internalSecret}}", "type": "text", "description": "Shared-secret CRM↔Catalyst. NO usa X-Api-Key." },
+              { "key": "X-Correlation-Id", "value": "{{$guid}}", "type": "text", "disabled": true }
+            ],
+            "body": {
+              "mode": "raw",
+              "options": { "raw": { "language": "json" } },
+              "raw": "{\n  \"nroSolicitud\": {{nroSolicitud}},\n  \"stage\": \"Completado\",\n  \"linkResultado\": \"https://example.com/informe/{{nroSolicitud}}\",\n  \"observaciones\": \"Prueba dev desde Postman\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/v1/internal/deal-estado",
+              "host": ["{{baseUrl}}"],
+              "path": ["v1", "internal", "deal-estado"]
+            },
+            "description": "Ruta INTERNA (workflow del CRM → Catalyst): notifica a ML el cambio de Stage de un Deal. Protegida por shared-secret `x-internal-secret` (no X-Api-Key, sin scope ni cap).\n\n**Mapeo Stage → Estado ML:**\n- 'Nueva Solicitud' → PENDIENTE (sent)\n- 'Agendado B2B' → COORDINACIÓN (sent)\n- 'Completado' / 'Cerrado' → FINALIZADO (sent) — **requiere `linkResultado`**\n- 'Cancelado' / otros → no mapea (skipped, 200)\n\n**Errores:** 400 VALIDATION_ERROR (`.strict()`) · 401 (secret inválido) · 422 UNPROCESSABLE (FINALIZADO sin linkResultado) · 502 UPSTREAM_ERROR (falla POST a ML)."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 esperado (sent/skipped) en payload válido', () => pm.expect([200,422]).to.include(pm.response.code));",
+                  "const b = pm.response.json();",
+                  "if (pm.response.code === 200) { pm.expect(b.status).to.be.oneOf(['sent','skipped']); }"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
