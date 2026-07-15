@@ -95,8 +95,9 @@ estado → `400 {codigo,mensaje,detalles[]}` → el use-case lo mapea a `422`). 
 - **[OQ-N10](../OPEN-QUESTIONS.md)** (nuevo, v1.1) — fuente de `NombreTecnico`/`Empresa`. Decidido
   con Nestor (2026-07-15): **los manda el CRM en el webhook**. `nombreTecnico` = `Deals.Inspector`
   (lookup → `Inspectores`; `Inspector.name` = nombre del técnico, verificado en vivo); `empresa` =
-  constante **`"Certia"`** (hardcodeada en el Deluge). Residual: el re-notify de `PENDIENTE` en
-  `Nueva Solicitud` choca con el anti-duplicados de v1.1 → **pedir confirmación a ML** o mapear a `skipped`.
+  constante **`"Certia"`** (hardcodeada en el Deluge). `PENDIENTE` — **decidido (Nestor 2026-07-15):**
+  se mantiene; el `422` resultante en el alta (sin inspector + anti-duplicados) es un **no-op aceptado
+  ("no afecta")**, solo queda en `audit_log`. NO cambiar a `skipped` sin OK.
 - **[OQ-P9](../OPEN-QUESTIONS.md)** — credenciales `authenticatecardoc` (Usuario/Password):
   **provistas (2026-07-15)** → cargar en Catalyst Environment Variables (`MLCENTER_USER/PASSWORD`),
   **nunca en el repo**. Primer impacto real contra **testing** (`.../ApiMiAutoTesting`).

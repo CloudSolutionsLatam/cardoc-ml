@@ -77,11 +77,10 @@ el nombre del técnico (= campo primario del módulo `Inspectores`).
 - **Técnico/empresa (ML v1.1):** `nombreTecnico` = `Deals.Inspector` (lookup → `Inspectores`, campo
   primario); `empresa` = constante **`"Certia"`**. El backend los exige para todo stage notificable →
   sin ellos responde `422`, ML no se llama (en `Nueva Solicitud` no suele haber Inspector → `422`).
-- **⚠️ `Nueva Solicitud → PENDIENTE` bajo v1.1:** ML aplica **anti-duplicados** (re-notificar el mismo
-  estado → `400`) y su param `Estado` solo lista `COORDINACIÓN`/`FINALIZADO`. Como ML ya crea la
-  solicitud en PENDIENTE, re-notificarla puede devolver `400`; el backend lo trata como `422`
-  (no reintentable), no como falso `502`. Pedir a ML confirmación de que tolera el re-notify de
-  PENDIENTE (y que en ese estado no exige inspector aún), o mapear `Nueva Solicitud → skipped`.
+- **`Nueva Solicitud → PENDIENTE` bajo v1.1 — decidido (Nestor 2026-07-15):** se **mantiene**. En el
+  alta no suele haber inspector (falta `nombreTecnico`) y ML aplica anti-duplicados, así que esa
+  notificación termina en `422` (el backend NO lo trata como `502` ni reintenta) — **aceptado como
+  no-op inocuo ("no afecta"):** solo queda en `audit_log`. **NO** cambiar a `skipped` sin OK explícito.
 - Para producción real de ML: credenciales `MLCENTER_USER/PASSWORD` + `CARDOC_ML_MODE=http` (OQ-P9).
 
 Ver también: `docs/reference/api-endpoints.md` (§ `POST /v1/internal/deal-estado`),

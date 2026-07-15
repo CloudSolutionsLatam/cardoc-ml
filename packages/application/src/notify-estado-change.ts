@@ -14,8 +14,11 @@ import { UpstreamError, type MlCenterClient, type MlEstado } from "@cardoc/provi
  * Flujo B2B: `Nueva Solicitud` → `Agendado B2B` → `Completado` → `Cerrado` | `Cancelado`.
  *
  * Cuatro stages notifican a ML; solo `Cancelado` NO mapea → `skipped` (no es error):
- *  - `Nueva Solicitud`: estado inicial → `PENDIENTE` (pedido de Nestor 2026-07-03; ML acepta el
- *    estado inicial que le re-notificamos).
+ *  - `Nueva Solicitud`: estado inicial → `PENDIENTE` (pedido de Nestor 2026-07-03). **NOTA v1.1:**
+ *    ML aplica anti-duplicados (re-notificar el mismo estado → 400) y en el alta no suele haber
+ *    inspector asignado (falta `NombreTecnico`), así que esta notificación normalmente termina en
+ *    `422` (invalid). Es un **NO-OP ACEPTADO por el owner (2026-07-15): "no afecta"** — no reintenta,
+ *    no llama a ML de más, solo queda en `audit_log`. NO cambiar a `skipped` sin OK explícito.
  *  - `Cancelado`: terminal; ML no tiene un estado de cancelación en el contrato AutoCheck.
  *
  * ✅ Confirmado (OQ-N6.a, Nestor 2026-07-03): el workflow del CRM dispara sobre `Deals.Stage`
