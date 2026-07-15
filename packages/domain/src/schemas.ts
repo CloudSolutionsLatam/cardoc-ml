@@ -82,6 +82,14 @@ export const dealEstadoSchema = z
     stage: z.string().min(1),
     linkResultado: z.string().url().optional(),
     observaciones: z.string().max(500).optional(),
+    /**
+     * Técnico que realiza el chequeo. Obligatorio en el contrato ML v1.1 para TODA
+     * actualización de estado; lo manda el CRM (Deals.Inspector). Opcional acá y exigido
+     * en el use-case cuando el stage sí notifica (mismo patrón que `linkResultado`).
+     */
+    nombreTecnico: z.string().min(1).max(100).optional(),
+    /** Empresa que realiza el chequeo. Obligatorio en ML v1.1; lo manda el CRM. */
+    empresa: z.string().min(1).max(100).optional(),
   })
   .strict();
 

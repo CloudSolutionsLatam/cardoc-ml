@@ -6,13 +6,18 @@
  * que FINALIZADO exige `LinkResultado` y que los stages no-notificables no llaman a ML.
  */
 import { describe, expect, it } from "vitest";
-import { MockMlCenterClient, type MlCenterClient, type UpdateEstadoInput } from "@cardoc/providers";
+import { MockMlCenterClient, UpstreamError, type MlCenterClient, type UpdateEstadoInput } from "@cardoc/providers";
 import { mapStageToEstado, notifyEstadoChange, STAGE_TO_ESTADO } from "../src/notify-estado-change";
 
-/** Cliente ML que siempre falla — para el camino de error upstream. */
+/** Técnico + empresa obligatorios (v1.1) — los aporta el CRM; se reusan en los inputs de prueba. */
+const WHO = { nombreTecnico: "Juan García", empresa: "Inspecciones XYZ" };
+
+/** Cliente ML que siempre falla con un status dado — para los caminos de error/clasificación. */
 class FailingMlClient implements MlCenterClient {
+  constructor(private readonly httpStatus = 503) {}
   async updateEstado(_input: UpdateEstadoInput): Promise<{ nroSolicitud: number; estado: string }> {
-    throw new Error("ML 503");
+    // 400 = rechazo de cliente (no reintentable) → el use-case lo mapea a 'invalid'; 5xx → 'error'.
+    throw new UpstreamError("mlcenter", this.httpStatus, `ML ${this.httpStatus}`);
   }
 }
 
@@ -59,7 +64,7 @@ describe("mapStageToEstado — pipeline B2B (OQ-N6)", () => {
 // ── Use-case notifyEstadoChange ─────────────────────────────────────────────────
 
 describe("notifyEstadoChange (outbound a ML)", () => {
-  it("skip solo en 'Cancelado' (no-notificable) — no llama a ML", async () => {
+  it("skip solo en 'Cancelado' (no-notificable) — no llama a ML ni exige técnico/empresa", async () => {
     const ml = new MockMlCenterClient();
     const out = await notifyEstadoChange({ nroSolicitud: 908812, stage: "Cancelado" }, { mlCenter: ml });
     expect(out.status).toBe("skipped");
@@ -68,22 +73,43 @@ describe("notifyEstadoChange (outbound a ML)", () => {
 
   it("envía PENDIENTE en 'Nueva Solicitud' (inicial, sin LinkResultado)", async () => {
     const ml = new MockMlCenterClient();
-    const out = await notifyEstadoChange({ nroSolicitud: 908812, stage: "Nueva Solicitud" }, { mlCenter: ml });
+    const out = await notifyEstadoChange({ nroSolicitud: 908812, stage: "Nueva Solicitud", ...WHO }, { mlCenter: ml });
     expect(out).toEqual({ status: "sent", estado: "PENDIENTE" });
-    expect(ml.calls[0]).toMatchObject({ nroSolicitud: 908812, estado: "PENDIENTE" });
+    expect(ml.calls[0]).toMatchObject({ nroSolicitud: 908812, estado: "PENDIENTE", ...WHO });
   });
 
-  it("envía COORDINACIÓN en 'Agendado B2B'", async () => {
+  it("envía COORDINACIÓN en 'Agendado B2B' propagando NombreTecnico/Empresa (obligatorios v1.1)", async () => {
     const ml = new MockMlCenterClient();
-    const out = await notifyEstadoChange({ nroSolicitud: 908812, stage: "Agendado B2B" }, { mlCenter: ml });
+    const out = await notifyEstadoChange({ nroSolicitud: 908812, stage: "Agendado B2B", ...WHO }, { mlCenter: ml });
     expect(out).toEqual({ status: "sent", estado: "COORDINACIÓN" });
-    expect(ml.calls[0]).toMatchObject({ nroSolicitud: 908812, estado: "COORDINACIÓN" });
+    expect(ml.calls[0]).toMatchObject({ nroSolicitud: 908812, estado: "COORDINACIÓN", ...WHO });
+  });
+
+  it("'invalid' (no llama a ML) si falta NombreTecnico o Empresa — obligatorios en v1.1", async () => {
+    const ml = new MockMlCenterClient();
+    const sinTecnico = await notifyEstadoChange(
+      { nroSolicitud: 1, stage: "Agendado B2B", empresa: "Inspecciones XYZ" },
+      { mlCenter: ml },
+    );
+    expect(sinTecnico.status).toBe("invalid");
+    const sinEmpresa = await notifyEstadoChange(
+      { nroSolicitud: 1, stage: "Agendado B2B", nombreTecnico: "Juan" },
+      { mlCenter: ml },
+    );
+    expect(sinEmpresa.status).toBe("invalid");
+    // Un string en blanco no cuenta (trim defensivo).
+    const enBlanco = await notifyEstadoChange(
+      { nroSolicitud: 1, stage: "Agendado B2B", nombreTecnico: "  ", empresa: "  " },
+      { mlCenter: ml },
+    );
+    expect(enBlanco.status).toBe("invalid");
+    expect(ml.calls).toHaveLength(0);
   });
 
   it("'invalid' (no 'error') si FINALIZADO sin LinkResultado — NO llama a ML", async () => {
     // Es validación de dominio, no falla de ML → la ruta lo traduce a 422, no a 502.
     const ml = new MockMlCenterClient();
-    const out = await notifyEstadoChange({ nroSolicitud: 1, stage: "Completado" }, { mlCenter: ml });
+    const out = await notifyEstadoChange({ nroSolicitud: 1, stage: "Completado", ...WHO }, { mlCenter: ml });
     expect(out.status).toBe("invalid");
     expect(ml.calls).toHaveLength(0);
   });
@@ -92,21 +118,34 @@ describe("notifyEstadoChange (outbound a ML)", () => {
     for (const stage of ["Completado", "Cerrado"]) {
       const ml = new MockMlCenterClient();
       const out = await notifyEstadoChange(
-        { nroSolicitud: 1, stage, linkResultado: "https://x/r.pdf", observaciones: "listo" },
+        { nroSolicitud: 1, stage, ...WHO, linkResultado: "https://x/r.pdf", observaciones: "listo" },
         { mlCenter: ml },
       );
       expect(out).toEqual({ status: "sent", estado: "FINALIZADO" });
-      // Propaga linkResultado + observaciones al cliente ML.
+      // Propaga técnico/empresa + linkResultado + observaciones al cliente ML.
       expect(ml.calls[0]).toMatchObject({
         estado: "FINALIZADO",
+        ...WHO,
         linkResultado: "https://x/r.pdf",
         observaciones: "listo",
       });
     }
   });
 
-  it("outcome 'error' (no throw) si el cliente ML falla, propagando el mensaje upstream", async () => {
-    const out = await notifyEstadoChange({ nroSolicitud: 1, stage: "Agendado B2B" }, { mlCenter: new FailingMlClient() });
+  it("outcome 'error' (502, reintentable) si ML falla con 5xx, propagando el mensaje upstream", async () => {
+    const out = await notifyEstadoChange(
+      { nroSolicitud: 1, stage: "Agendado B2B", ...WHO },
+      { mlCenter: new FailingMlClient(503) },
+    );
     expect(out).toMatchObject({ status: "error", message: expect.stringContaining("503") });
+  });
+
+  it("outcome 'invalid' (422, NO reintentable) si ML rechaza con 400 — validación/transición/mismo estado", async () => {
+    // Anti-duplicados de v1.1: re-notificar el mismo estado devuelve 400. Reintentar no arregla nada.
+    const out = await notifyEstadoChange(
+      { nroSolicitud: 1, stage: "Agendado B2B", ...WHO },
+      { mlCenter: new FailingMlClient(400) },
+    );
+    expect(out.status).toBe("invalid");
   });
 });

@@ -105,6 +105,11 @@ implementado en `STAGE_TO_ESTADO`, `packages/application/src/notify-estado-chang
 > ✅ Resuelto (OQ-N6.a, Nestor 2026-07-03): el workflow del CRM dispara sobre `Deals.Stage`
 > (no `Informes_Revision.Estado`), así que las claves del mapa son correctas.
 
+> **ML v1.1 (2026-07-15):** cada actualización de estado exige `NombreTecnico` + `Empresa`. Se
+> resolvió que **los manda el CRM en el webhook** (OQ-N10): `nombreTecnico` = `Deals.Inspector`
+> (lookup → `Inspectores`, ya listado en "Agenda"); `empresa` = **⚠️ api_name por confirmar**. El
+> re-notify de `PENDIENTE` (`Nueva Solicitud`) queda en observación por el anti-duplicados de v1.1.
+
 ## Hallazgos estructurales (cambian el diseño del adapter)
 
 1. **Deals NO tiene lookup a `Accounts`.** El único lookup "de cuenta" es

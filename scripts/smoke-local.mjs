@@ -83,7 +83,9 @@ r = await fetch(`${base}/v1/internal/deal-estado`, { method: "POST", headers: { 
 check("POST /v1/internal/deal-estado sin secret → 401", r.status === 401, `got ${r.status}`);
 
 const INT = { "Content-Type": "application/json", "x-internal-secret": "dev-internal-secret" };
-r = await fetch(`${base}/v1/internal/deal-estado`, { method: "POST", headers: INT, body: JSON.stringify({ nroSolicitud: 908812, stage: "Nueva Solicitud" }) });
+// v1.1: NombreTecnico + Empresa obligatorios en toda actualización — los aporta el CRM.
+const WHO = { nombreTecnico: "Juan García", empresa: "Inspecciones XYZ" };
+r = await fetch(`${base}/v1/internal/deal-estado`, { method: "POST", headers: INT, body: JSON.stringify({ nroSolicitud: 908812, stage: "Nueva Solicitud", ...WHO }) });
 j = await r.json();
 check("POST internal 'Nueva Solicitud' → 200 sent PENDIENTE", r.status === 200 && j.status === "sent" && j.estado === "PENDIENTE", `got ${r.status} ${JSON.stringify(j)}`);
 
@@ -92,12 +94,17 @@ j = await r.json();
 check("POST internal 'Cancelado' → 200 skipped (stage no notificable)", r.status === 200 && j.status === "skipped", `got ${r.status} ${JSON.stringify(j)}`);
 
 // Mapeo B2B real (E-07): Agendado B2B → COORDINACIÓN (ML en modo mock).
-r = await fetch(`${base}/v1/internal/deal-estado`, { method: "POST", headers: INT, body: JSON.stringify({ nroSolicitud: 908812, stage: "Agendado B2B" }) });
+r = await fetch(`${base}/v1/internal/deal-estado`, { method: "POST", headers: INT, body: JSON.stringify({ nroSolicitud: 908812, stage: "Agendado B2B", ...WHO }) });
 j = await r.json();
 check("POST internal 'Agendado B2B' → 200 sent COORDINACIÓN", r.status === 200 && j.status === "sent" && j.estado === "COORDINACIÓN", `got ${r.status} ${JSON.stringify(j)}`);
 
+// v1.1: sin NombreTecnico/Empresa → 422 (validación de dominio, ML nunca se llama).
+r = await fetch(`${base}/v1/internal/deal-estado`, { method: "POST", headers: INT, body: JSON.stringify({ nroSolicitud: 908812, stage: "Agendado B2B" }) });
+j = await r.json();
+check("POST internal 'Agendado B2B' sin técnico/empresa → 422 UNPROCESSABLE", r.status === 422 && j?.error?.code === "UNPROCESSABLE", `got ${r.status} ${JSON.stringify(j)}`);
+
 // FINALIZADO sin LinkResultado → 422 (validación de dominio, NO 502: ML nunca se llama).
-r = await fetch(`${base}/v1/internal/deal-estado`, { method: "POST", headers: INT, body: JSON.stringify({ nroSolicitud: 908812, stage: "Completado" }) });
+r = await fetch(`${base}/v1/internal/deal-estado`, { method: "POST", headers: INT, body: JSON.stringify({ nroSolicitud: 908812, stage: "Completado", ...WHO }) });
 j = await r.json();
 check("POST internal 'Completado' sin LinkResultado → 422 UNPROCESSABLE", r.status === 422 && j?.error?.code === "UNPROCESSABLE", `got ${r.status} ${JSON.stringify(j)}`);
 

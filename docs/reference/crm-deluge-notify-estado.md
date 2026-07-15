@@ -24,8 +24,15 @@ Contrato (payload, `dealEstadoSchema` `.strict()` — solo estos campos):
 |---|---|---|---|
 | `nroSolicitud` | int | Sí | External ID de la Oportunidad (`Deals.EXTERNAL_ID`). |
 | `stage` | string | Sí | Valor de `Deals.Stage`. El backend lo mapea a `Estado` de ML. |
+| `nombreTecnico` | string (≤100) | Sí* | **Nuevo (ML v1.1).** Técnico que hace el chequeo. Se lee del `Deals.Inspector` (lookup → `Inspectores`). |
+| `empresa` | string (≤100) | Sí* | **Nuevo (ML v1.1).** Empresa inspectora. ⚠️ Confirmar api_name/fuente (ver script). |
 | `linkResultado` | url | Solo si FINALIZADO | URL del PDF del informe = endpoint D3b `/v1/informes/solicitud/{nroSolicitud}/pdf`. |
 | `observaciones` | string (≤500) | No | Texto libre opcional. |
+
+> \* `nombreTecnico`/`empresa` son **opcionales en el schema** pero el backend los **exige**
+> cuando el stage sí notifica (todo estado que va a ML): si faltan → `422 UNPROCESSABLE`, ML no
+> se llama (mismo patrón que `linkResultado` en FINALIZADO). Son **obligatorios en ML v1.1** para
+> TODA actualización, así que el Deluge debe mandarlos siempre que el Deal tenga inspector asignado.
 
 Mapeo que aplica el backend (`STAGE_TO_ESTADO`): `Nueva Solicitud → PENDIENTE`;
 `Agendado B2B → COORDINACIÓN`; `Completado`/`Cerrado → FINALIZADO` (requiere `linkResultado`);
@@ -56,10 +63,25 @@ string button.ml_notificar_estado_oportunidad(String dealId)
 	stageToEstado.put("Completado", "FINALIZADO");
 	stageToEstado.put("Cerrado", "FINALIZADO");
 
-	// 1. Traer el Deal para leer Stage + NroSolicitud (EXTERNAL_ID)
+	// 1. Traer el Deal para leer Stage + NroSolicitud (EXTERNAL_ID) + inspector/empresa
 	deal = zoho.crm.getRecordById("Deals", dealId.toLong());
 	stage = ifnull(deal.get("Stage"), "").toString().trim();
 	nroSolicitud = ifnull(deal.get("EXTERNAL_ID"), "").toString();
+
+	// Técnico + empresa (ML v1.1: obligatorios en toda actualización).
+	// `Inspector` es un lookup → módulo Inspectores; en Deluge el lookup devuelve un map con name/id.
+	inspectorMap = deal.get("Inspector");
+	nombreTecnico = "";
+	if(inspectorMap != null)
+	{
+		nombreTecnico = ifnull(inspectorMap.get("name"), "").toString().trim();
+	}
+	// ⚠️ CONFIRMAR (Nestor): api_name/fuente exacta de la EMPRESA inspectora. Candidatos:
+	//    (a) un campo de la Oportunidad (ej. deal.get("Empresa_Inspectora")); o
+	//    (b) un campo del registro Inspectores (traerlo con zoho.crm.getRecordById("Inspectores", id)); o
+	//    (c) valor fijo si siempre inspecciona la misma empresa.
+	// Placeholder hasta confirmar — reemplazar por la fuente real:
+	empresa = ifnull(deal.get("Empresa_Inspectora"), "").toString().trim();
 
 	// Guard: sin NroSolicitud no se puede notificar (el payload lo exige)
 	if(nroSolicitud == "" || nroSolicitud == "null")
@@ -73,6 +95,17 @@ string button.ml_notificar_estado_oportunidad(String dealId)
 	payload = Map();
 	payload.put("nroSolicitud", nroSolicitud.toLong());
 	payload.put("stage", stage);
+	// NombreTecnico/Empresa (obligatorios en ML v1.1). Se envían si están cargados; el backend los
+	// EXIGE para los stages notificables → si faltan responde 422 (ML no se llama). Se omiten vacíos
+	// para que el error del backend sea claro ("obligatorios") en vez de mandar strings en blanco.
+	if(nombreTecnico != "")
+	{
+		payload.put("nombreTecnico", nombreTecnico);
+	}
+	if(empresa != "")
+	{
+		payload.put("empresa", empresa);
+	}
 	// LinkResultado (URL del PDF por NroSolicitud) es obligatorio para FINALIZADO —
 	// en Completado/Cerrado el informe ya existe. En COORDINACIÓN/otros no se adjunta.
 	if(estado == "FINALIZADO")
@@ -117,6 +150,14 @@ string button.ml_notificar_estado_oportunidad(String dealId)
   el dominio del entorno prod.
 - **Inspección:** con `CARDOC_ML_MODE=log` en Catalyst, cada disparo deja en los Logs de la
   función las líneas `[ml-notify]` (inbound + payload que iría a ML) sin llamar a ML real.
+- **Técnico/empresa (ML v1.1):** `nombreTecnico` sale de `Deals.Inspector` (lookup → `Inspectores`);
+  `empresa` tiene la **fuente por confirmar** (⚠️ ver el placeholder `Empresa_Inspectora` en el script).
+  El backend los exige para todo stage notificable → sin ellos responde `422`, ML no se llama.
+- **⚠️ `Nueva Solicitud → PENDIENTE` bajo v1.1:** ML aplica **anti-duplicados** (re-notificar el mismo
+  estado → `400`) y su param `Estado` solo lista `COORDINACIÓN`/`FINALIZADO`. Como ML ya crea la
+  solicitud en PENDIENTE, re-notificarla puede devolver `400`; el backend lo trata como `422`
+  (no reintentable), no como falso `502`. Pedir a ML confirmación de que tolera el re-notify de
+  PENDIENTE (y que en ese estado no exige inspector aún), o mapear `Nueva Solicitud → skipped`.
 - Para producción real de ML: credenciales `MLCENTER_USER/PASSWORD` + `CARDOC_ML_MODE=http` (OQ-P9).
 
 Ver también: `docs/reference/api-endpoints.md` (§ `POST /v1/internal/deal-estado`),

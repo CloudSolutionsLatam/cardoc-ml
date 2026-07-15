@@ -6,7 +6,7 @@
  *
  * El `nroSolicitud` es el External ID de la Oportunidad (= Nº de solicitud AutoCheck).
  */
-import type { MlCenterClient, MlEstado } from "@cardoc/providers";
+import { UpstreamError, type MlCenterClient, type MlEstado } from "@cardoc/providers";
 
 /**
  * Mapeo CRM `Deal.Stage` (pipeline **B2B**) -> ML `Estado`. Valores confirmados por Nestor
@@ -40,6 +40,10 @@ export interface NotifyEstadoInput {
   nroSolicitud: number;
   /** Valor del `Stage` del Deal en CRM. */
   stage: string;
+  /** Técnico que realiza el chequeo — obligatorio en ML v1.1 para cualquier estado notificable. */
+  nombreTecnico?: string;
+  /** Empresa que realiza el chequeo — obligatorio en ML v1.1 para cualquier estado notificable. */
+  empresa?: string;
   /** URL del resultado/informe — requerido si el Stage mapea a FINALIZADO. */
   linkResultado?: string;
   observaciones?: string;
@@ -62,6 +66,14 @@ export async function notifyEstadoChange(
   if (!estado) {
     return { status: "skipped", reason: `Stage '${input.stage}' no mapea a un Estado de ML` };
   }
+  // v1.1: NombreTecnico y Empresa son obligatorios en TODA actualización. Los aporta el CRM en el
+  // webhook (Deals.Inspector); si faltan, ML respondería 400 → se corta acá como validación de
+  // dominio ('invalid' → 422, NO reintentable): reintentar contra ML no completa un payload incompleto.
+  const nombreTecnico = input.nombreTecnico?.trim();
+  const empresa = input.empresa?.trim();
+  if (!nombreTecnico || !empresa) {
+    return { status: "invalid", message: "NombreTecnico y Empresa son obligatorios (contrato ML v1.1)" };
+  }
   if (estado === "FINALIZADO" && !input.linkResultado) {
     // Validación de dominio, NO falla de ML: ML no se contacta. → 'invalid' (4xx), no 'error' (502).
     return { status: "invalid", message: "LinkResultado es obligatorio cuando el estado es FINALIZADO" };
@@ -70,11 +82,19 @@ export async function notifyEstadoChange(
     await deps.mlCenter.updateEstado({
       nroSolicitud: input.nroSolicitud,
       estado,
+      nombreTecnico,
+      empresa,
       linkResultado: input.linkResultado,
       observaciones: input.observaciones,
     });
     return { status: "sent", estado };
   } catch (e) {
+    // Distingue el rechazo de CLIENTE (400: validación / transición inválida / mismo estado por
+    // anti-duplicados) de la falla REAL del upstream. Un 400 NO es reintentable → 'invalid' (422);
+    // el resto (5xx, red, 401 tras re-login fallido) sí → 'error' (502). Ver mlcenter-client.ts.
+    if (e instanceof UpstreamError && e.httpStatus === 400) {
+      return { status: "invalid", message: e.message };
+    }
     return { status: "error", message: e instanceof Error ? e.message : String(e) };
   }
 }
