@@ -89,13 +89,14 @@ estado → `400 {codigo,mensaje,detalles[]}` → el use-case lo mapea a `422`). 
   `Completado`/`Cerrado`→`FINALIZADO` (requiere `LinkResultado`); solo `Cancelado`→sin notificar
   (`skipped`). **✅ (a) Confirmado (Nestor 2026-07-03):** el workflow del CRM dispara sobre
   `Deals.Stage` (no `Informes_Revision.Estado`), así que las claves del mapa son correctas.
-- **[OQ-N7](../OPEN-QUESTIONS.md)** — origen del `LinkResultado` (FINALIZADO): ¿el PDF del
-  informe (Creator/WorkDrive `pdf_url`) o un link público distinto?
+- **[OQ-N7](../OPEN-QUESTIONS.md)** — ✅ **resuelto (Nestor 2026-07-15):** el `LinkResultado`
+  (FINALIZADO) es el endpoint **D3b autenticado de cardoc** `/v1/informes/solicitud/{nro}/pdf`
+  (lo arma el Deluge); ML/los consumidores saben cómo consumirlo. Validado en vivo (`FINALIZADO`→`sent`).
 - **[OQ-N10](../OPEN-QUESTIONS.md)** (nuevo, v1.1) — fuente de `NombreTecnico`/`Empresa`. Decidido
   con Nestor (2026-07-15): **los manda el CRM en el webhook**. `nombreTecnico` = `Deals.Inspector`
-  (lookup → `Inspectores`); `empresa` = **⚠️ api_name/fuente por confirmar** (placeholder
-  `Empresa_Inspectora` en el Deluge). Además, el re-notify de `PENDIENTE` en `Nueva Solicitud`
-  choca con el anti-duplicados de v1.1 → **pedir confirmación a ML** o mapear a `skipped`.
+  (lookup → `Inspectores`; `Inspector.name` = nombre del técnico, verificado en vivo); `empresa` =
+  constante **`"Certia"`** (hardcodeada en el Deluge). Residual: el re-notify de `PENDIENTE` en
+  `Nueva Solicitud` choca con el anti-duplicados de v1.1 → **pedir confirmación a ML** o mapear a `skipped`.
 - **[OQ-P9](../OPEN-QUESTIONS.md)** — credenciales `authenticatecardoc` (Usuario/Password):
   **provistas (2026-07-15)** → cargar en Catalyst Environment Variables (`MLCENTER_USER/PASSWORD`),
   **nunca en el repo**. Primer impacto real contra **testing** (`.../ApiMiAutoTesting`).

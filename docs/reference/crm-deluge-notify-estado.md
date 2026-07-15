@@ -2,7 +2,7 @@
 title: CRM Deluge — notificación de estado de Oportunidad (E-07, lado CRM)
 status: referencia (script CRM-side; vive en la consola de Zoho CRM, se versiona acá)
 document_type: integration-reference
-last_reviewed: 2026-07-03
+last_reviewed: 2026-07-15
 ---
 
 # Deluge · `ml_notificar_estado_oportunidad` (botón en Deals)
@@ -25,7 +25,7 @@ Contrato (payload, `dealEstadoSchema` `.strict()` — solo estos campos):
 | `nroSolicitud` | int | Sí | External ID de la Oportunidad (`Deals.EXTERNAL_ID`). |
 | `stage` | string | Sí | Valor de `Deals.Stage`. El backend lo mapea a `Estado` de ML. |
 | `nombreTecnico` | string (≤100) | Sí* | **Nuevo (ML v1.1).** Técnico que hace el chequeo. Se lee del `Deals.Inspector` (lookup → `Inspectores`). |
-| `empresa` | string (≤100) | Sí* | **Nuevo (ML v1.1).** Empresa inspectora. ⚠️ Confirmar api_name/fuente (ver script). |
+| `empresa` | string (≤100) | Sí* | **Nuevo (ML v1.1).** Empresa inspectora — constante **`"Certia"`** (hardcodeada en el Deluge). |
 | `linkResultado` | url | Solo si FINALIZADO | URL del PDF del informe = endpoint D3b `/v1/informes/solicitud/{nroSolicitud}/pdf`. |
 | `observaciones` | string (≤500) | No | Texto libre opcional. |
 
@@ -42,95 +42,19 @@ Respuestas: `200 {status:"sent"|"skipped"}`, `422 UNPROCESSABLE` (FINALIZADO sin
 
 ## Función
 
-```js
-string button.ml_notificar_estado_oportunidad(String dealId)
-{
-	// ── Config ───────────────────────────────────────────────────────────
-	// Dev. Para prod cambiar por el dominio del entorno de producción.
-	baseUrl = "https://ml-909785950.development.catalystserverless.com/server/api";
-	// ⚠️ Reemplazar por el INTERNAL_WEBHOOK_SECRET REAL del entorno (el 'dev-internal-secret'
-	//    es solo el fallback de desarrollo). Idealmente en una variable de org.
-	internalSecret = "dev-internal-secret";
+El código Deluge vive en [`ml_notificar_estado_oportunidad.dg`](ml_notificar_estado_oportunidad.dg)
+— **fuente única**, espejo de lo que está en la consola de Zoho CRM. Qué hace:
 
-	// ── Mapeo Stage (CRM) → Estado (ML) ───────────────────────────────────
-	// ESPEJO de STAGE_TO_ESTADO del backend (packages/application/src/notify-estado-change.ts).
-	// Acá se usa SOLO para decidir cuándo adjuntar linkResultado (FINALIZADO). La función SIEMPRE
-	// notifica: el backend re-mapea el stage crudo, decide sent/skipped y lo registra en audit_log.
-	// ⚠️ Mantener EN SINCRONÍA con el backend si cambian los nombres de stage del pipeline B2B.
-	stageToEstado = Map();
-	stageToEstado.put("Nueva Solicitud", "PENDIENTE");
-	stageToEstado.put("Agendado B2B", "COORDINACIÓN");
-	stageToEstado.put("Completado", "FINALIZADO");
-	stageToEstado.put("Cerrado", "FINALIZADO");
+1. Lee del Deal: `Stage`, `EXTERNAL_ID` (= `nroSolicitud`) e `Inspector` (→ `nombreTecnico`).
+2. Fija `empresa = "Certia"` (constante).
+3. **Siempre** postea `POST /v1/internal/deal-estado` con el `stage` crudo + `x-internal-secret`;
+   el backend re-mapea, decide `sent`/`skipped` y valida el invariante (fuente de verdad única).
+4. Adjunta `linkResultado` (PDF por `nroSolicitud`) solo cuando el stage mapea a `FINALIZADO`.
+5. `nombreTecnico` se omite si el Deal no tiene `Inspector` → el backend responde `422` (falta técnico).
 
-	// 1. Traer el Deal para leer Stage + NroSolicitud (EXTERNAL_ID) + inspector/empresa
-	deal = zoho.crm.getRecordById("Deals", dealId.toLong());
-	stage = ifnull(deal.get("Stage"), "").toString().trim();
-	nroSolicitud = ifnull(deal.get("EXTERNAL_ID"), "").toString();
-
-	// Técnico + empresa (ML v1.1: obligatorios en toda actualización).
-	// `Inspector` es un lookup → módulo Inspectores; en Deluge el lookup devuelve un map con name/id.
-	inspectorMap = deal.get("Inspector");
-	nombreTecnico = "";
-	if(inspectorMap != null)
-	{
-		nombreTecnico = ifnull(inspectorMap.get("name"), "").toString().trim();
-	}
-	// ⚠️ CONFIRMAR (Nestor): api_name/fuente exacta de la EMPRESA inspectora. Candidatos:
-	//    (a) un campo de la Oportunidad (ej. deal.get("Empresa_Inspectora")); o
-	//    (b) un campo del registro Inspectores (traerlo con zoho.crm.getRecordById("Inspectores", id)); o
-	//    (c) valor fijo si siempre inspecciona la misma empresa.
-	// Placeholder hasta confirmar — reemplazar por la fuente real:
-	empresa = ifnull(deal.get("Empresa_Inspectora"), "").toString().trim();
-
-	// Guard: sin NroSolicitud no se puede notificar (el payload lo exige)
-	if(nroSolicitud == "" || nroSolicitud == "null")
-	{
-		return "ERROR: el Deal " + dealId + " no tiene EXTERNAL_ID (NroSolicitud); no se notifica.";
-	}
-
-	// 2. Payload — SIEMPRE se notifica; el backend decide sent/skipped (.strict(): solo estos campos).
-	//    Se envía el STAGE crudo; el backend re-mapea (fuente de verdad única) y valida el invariante.
-	estado = ifnull(stageToEstado.get(stage), "");
-	payload = Map();
-	payload.put("nroSolicitud", nroSolicitud.toLong());
-	payload.put("stage", stage);
-	// NombreTecnico/Empresa (obligatorios en ML v1.1). Se envían si están cargados; el backend los
-	// EXIGE para los stages notificables → si faltan responde 422 (ML no se llama). Se omiten vacíos
-	// para que el error del backend sea claro ("obligatorios") en vez de mandar strings en blanco.
-	if(nombreTecnico != "")
-	{
-		payload.put("nombreTecnico", nombreTecnico);
-	}
-	if(empresa != "")
-	{
-		payload.put("empresa", empresa);
-	}
-	// LinkResultado (URL del PDF por NroSolicitud) es obligatorio para FINALIZADO —
-	// en Completado/Cerrado el informe ya existe. En COORDINACIÓN/otros no se adjunta.
-	if(estado == "FINALIZADO")
-	{
-		payload.put("linkResultado", baseUrl + "/v1/informes/solicitud/" + nroSolicitud + "/pdf");
-	}
-
-	// 3. Headers — auth por shared-secret (NO Bearer; Catalyst reserva Authorization)
-	headers = Map();
-	headers.put("x-internal-secret", internalSecret);
-	headers.put("Content-Type", "application/json");
-
-	// 4. POST a Catalyst: /v1/internal/deal-estado
-	response = invokeurl
-	[
-		url : baseUrl + "/v1/internal/deal-estado"
-		type : POST
-		parameters : payload.toString()
-		headers : headers
-	];
-
-	// El endpoint responde { status: sent|skipped, ... } (200) o el sobre de error.
-	return response.toString();
-}
-```
+⚠️ Antes de prod, revisar en el `.dg`: `baseUrl` (dominio del entorno), `internalSecret`
+(el `INTERNAL_WEBHOOK_SECRET` real, no el fallback dev) y que `Inspector.name` sea efectivamente
+el nombre del técnico (= campo primario del módulo `Inspectores`).
 
 ## Notas de implementación
 
@@ -150,9 +74,9 @@ string button.ml_notificar_estado_oportunidad(String dealId)
   el dominio del entorno prod.
 - **Inspección:** con `CARDOC_ML_MODE=log` en Catalyst, cada disparo deja en los Logs de la
   función las líneas `[ml-notify]` (inbound + payload que iría a ML) sin llamar a ML real.
-- **Técnico/empresa (ML v1.1):** `nombreTecnico` sale de `Deals.Inspector` (lookup → `Inspectores`);
-  `empresa` tiene la **fuente por confirmar** (⚠️ ver el placeholder `Empresa_Inspectora` en el script).
-  El backend los exige para todo stage notificable → sin ellos responde `422`, ML no se llama.
+- **Técnico/empresa (ML v1.1):** `nombreTecnico` = `Deals.Inspector` (lookup → `Inspectores`, campo
+  primario); `empresa` = constante **`"Certia"`**. El backend los exige para todo stage notificable →
+  sin ellos responde `422`, ML no se llama (en `Nueva Solicitud` no suele haber Inspector → `422`).
 - **⚠️ `Nueva Solicitud → PENDIENTE` bajo v1.1:** ML aplica **anti-duplicados** (re-notificar el mismo
   estado → `400`) y su param `Estado` solo lista `COORDINACIÓN`/`FINALIZADO`. Como ML ya crea la
   solicitud en PENDIENTE, re-notificarla puede devolver `400`; el backend lo trata como `422`

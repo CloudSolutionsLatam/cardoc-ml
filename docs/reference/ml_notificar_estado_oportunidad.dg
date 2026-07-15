@@ -1,0 +1,53 @@
+string button.ml_notificar_estado_oportunidad(String dealId)
+{
+baseUrl = "https://ml-909785950.development.catalystserverless.com/server/api";
+internalSecret = "dev-internal-secret";
+// ⚠️ prod: INTERNAL_WEBHOOK_SECRET real
+// Espejo de STAGE_TO_ESTADO del backend. Acá SOLO decide cuándo adjuntar linkResultado.
+// La función SIEMPRE notifica; el backend re-mapea y decide sent/skipped.
+stageToEstado = Map();
+stageToEstado.put("Agendado B2B","COORDINACIÓN");
+stageToEstado.put("Completado","FINALIZADO");
+stageToEstado.put("Cerrado","FINALIZADO");
+deal = zoho.crm.getRecordById("Deals",dealId.toLong());
+stage = ifnull(deal.get("Stage"),"").toString().trim();
+nroSolicitud = ifnull(deal.get("EXTERNAL_ID"),"").toString();
+// Técnico = campo Inspector (lookup → Inspectores); empresa fija = Certia. Obligatorios en ML v1.1.
+inspector = deal.get("Inspector");
+nombreTecnico = "";
+if(inspector != null)
+{
+	nombreTecnico = ifnull(inspector.get("name"),"").toString().trim();
+}
+empresa = "Certia";
+if(nroSolicitud == "" || nroSolicitud == "null")
+{
+	return "ERROR: el Deal " + dealId + " no tiene EXTERNAL_ID (NroSolicitud); no se notifica.";
+}
+estado = ifnull(stageToEstado.get(stage),"");
+payload = Map();
+payload.put("nroSolicitud",nroSolicitud.toLong());
+payload.put("stage",stage);
+if(nombreTecnico != "")
+{
+	payload.put("nombreTecnico",nombreTecnico);
+}
+payload.put("empresa",empresa);
+if(estado == "FINALIZADO")
+{
+	payload.put("linkResultado",baseUrl + "/v1/informes/solicitud/" + nroSolicitud + "/pdf");
+}
+headers = Map();
+headers.put("x-internal-secret",internalSecret);
+headers.put("Content-Type","application/json");
+info "payload:";
+info payload;
+response = invokeurl
+[
+	url :baseUrl + "/v1/internal/deal-estado"
+	type :POST
+	parameters:payload.toString()
+	headers:headers
+];
+return response.toString();
+}
