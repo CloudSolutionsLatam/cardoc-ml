@@ -100,14 +100,17 @@ export function createReportDetailFetcher(conn: CreatorConnection, fetchFn: Fetc
  * 2026-07-01) → GET sin auth. Degrada a `null` ante cualquier fallo (el informe se genera igual,
  * con placeholder). No necesita OAuth.
  */
-export function createPublicImageFetcher(fetchFn: FetchFn = fetch): ImageFetcher {
+export function createPublicImageFetcher(fetchFn: FetchFn = fetch, timeoutMs = 8_000): ImageFetcher {
   return async (url) => {
     try {
-      const res = await fetchFn(url);
+      // Timeout POR FOTO: sin él, una conexión colgada bloquea a su worker hasta la guillotina de
+      // la plataforma (Advanced I/O corta TODO a los 30s) y un solo cuelgue mata la generación
+      // entera. Con timeout, la foto colgada se omite (misma degradación que una foto caída).
+      const res = await fetchFn(url, { signal: AbortSignal.timeout(timeoutMs) });
       if (!res.ok) return null;
       return new Uint8Array(await res.arrayBuffer());
     } catch {
-      return null; // WorkDrive caído / archivo ilegible → sin foto, nunca rompe la generación
+      return null; // WorkDrive caído / timeout / archivo ilegible → sin foto, nunca rompe la generación
     }
   };
 }

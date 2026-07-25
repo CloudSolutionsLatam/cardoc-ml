@@ -195,6 +195,8 @@ export interface ZohoCreatorReportsSourceDeps {
   fetchImage?: ImageFetcher;
   /** Texto "Generado:" del PDF (el container estampa la fecha del request). */
   generatedAt?: string;
+  /** Descargas de fotos en paralelo (default del generador; tunable por env desde el container). */
+  imageConcurrency?: number;
   /** Inyectable para tests; por defecto pdf-lib con el `fetchImage`/`generatedAt` provistos. */
   pdfGenerator?: PdfGenerator;
 }
@@ -211,7 +213,13 @@ export interface ZohoCreatorReportsSourceDeps {
 export class ZohoCreatorReportsSource implements ReportsSource {
   private readonly gen: PdfGenerator;
   constructor(private readonly deps: ZohoCreatorReportsSourceDeps) {
-    this.gen = deps.pdfGenerator ?? new PdfLibReportGenerator({ fetchImage: deps.fetchImage, generatedAt: deps.generatedAt });
+    this.gen =
+      deps.pdfGenerator ??
+      new PdfLibReportGenerator({
+        fetchImage: deps.fetchImage,
+        generatedAt: deps.generatedAt,
+        imageConcurrency: deps.imageConcurrency,
+      });
   }
 
   async listByAccount(_accountId: string, _query: ListInformesQuery): Promise<Page<InformeRevision>> {
@@ -223,7 +231,9 @@ export class ZohoCreatorReportsSource implements ReportsSource {
   }
 
   async openPdf(_accountId: string, id: string): Promise<ReportPdf> {
+    const t0 = Date.now();
     const env = await this.deps.fetchReportDetail(id, PORTAL_TYPE);
+    const tDetail = Date.now() - t0;
     // Envelope: cualquier code != 3000 (o env/result ausente) es error del upstream (§4.1).
     if (!env || env.code !== 3000 || !env.result) {
       throw new UpstreamError("creator", 502, `envelope inválido (code=${env?.code ?? "?"})`);
@@ -239,7 +249,13 @@ export class ZohoCreatorReportsSource implements ReportsSource {
       throw new ReportNotFoundError(id);
     }
     const informe = transformReportData(result);
+    const tGen0 = Date.now();
     const bytes = await this.gen.generate(informe);
+    // Telemetría de fases (logs de la función): permite diagnosticar dónde se va el tiempo EN EL
+    // ENTORNO REAL (la ventana de Advanced I/O es 30s y el óptimo de concurrencia varía por entorno).
+    console.log(
+      `[pdf] id=${id} detailMs=${tDetail} genMs=${Date.now() - tGen0} pdfBytes=${bytes.length} componentes=${informe.detalles.length}`,
+    );
     return {
       stream: Readable.from(Buffer.from(bytes)),
       contentType: "application/pdf",

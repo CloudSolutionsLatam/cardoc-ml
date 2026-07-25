@@ -183,10 +183,14 @@ function buildCreatorReports(conn: CreatorConnection): ReportsSource {
     hour: "2-digit",
     minute: "2-digit",
   });
+  // Concurrencia de descarga de fotos: la descarga domina el tiempo de generación (perfil 2026-07-15).
+  // Default 32 (medido); tunable sin redeploy de código vía env.
+  const imageConcurrency = Number(process.env["CARDOC_PDF_IMAGE_CONCURRENCY"]) || undefined;
   return new ZohoCreatorReportsSource({
     fetchReportDetail: createReportDetailFetcher(conn),
     fetchImage: createPublicImageFetcher(),
     generatedAt,
+    imageConcurrency,
   });
 }
 

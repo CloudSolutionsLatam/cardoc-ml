@@ -40,6 +40,8 @@ export interface PdfGeneratorOptions {
   fetchImage?: ImageFetcher;
   /** Timestamp "Generado:" (el cliente lo estampa). Inyectable para tests deterministas. */
   generatedAt?: string;
+  /** Descargas de fotos en paralelo (default `IMAGE_CONCURRENCY`). Tunable por env vía container. */
+  imageConcurrency?: number;
 }
 
 export interface PdfGenerator {
@@ -90,7 +92,13 @@ const GAP_TEXT_PHOTOS = 8; // margin-top 10px del bloque de fotos respecto del t
 const MAX_PHOTO_H = 420; // tope de alto por foto (una foto vertical no puede superar la hoja)
 const PHOTO_W = (CONTENT_W - 2 * CARD_PAD_X - PHOTO_COL_GAP) / 2; // ancho de cada foto: 2 por fila
 const MAX_PHOTOS = 6; // tope de fotos por componente (portal: .slice(0,6))
-const IMAGE_CONCURRENCY = 8; // descargas de fotos en paralelo (tope; la red es el cuello de botella)
+// Descargas de fotos en paralelo. La descarga ES el cuello de botella de la generación (perfil
+// 2026-07-15, informe real 258 fotos/120 MB: descarga 17.0s de 17.4s totales; embed+save 0.4s).
+// ⚠️ El óptimo DEPENDE DEL ENTORNO: desde red local 8→17.0s · 16→9.3s · 32→5.4s, pero desde el
+// egress de Catalyst 32 REGRESIONÓ a 408 incluso tibio (throttling/conexiones colgadas hacia
+// WorkDrive), mientras 8 completaba en ~9-14s. Default conservador 8; tunear por entorno con
+// `CARDOC_PDF_IMAGE_CONCURRENCY` (env → container → opts), midiendo con los logs `[pdf]`.
+const IMAGE_CONCURRENCY = 8;
 // Las fotos son EVIDENCIA de inspección (motores, detalles finos): se embeben en su calidad/resolución
 // ORIGINAL, sin recomprimir (bajar calidad arruinaría el detalle; las fuentes ya son ~1080px). El peso
 // del PDF (302 fotos → ~126 MB) es inherente; la usabilidad se resuelve con caché/portal, no degradando.
@@ -808,7 +816,8 @@ export class PdfLibReportGenerator implements PdfGenerator {
         }
       }
     };
-    await Promise.all(Array.from({ length: Math.min(IMAGE_CONCURRENCY, urls.length) }, worker));
+    const concurrency = this.opts.imageConcurrency && this.opts.imageConcurrency > 0 ? this.opts.imageConcurrency : IMAGE_CONCURRENCY;
+    await Promise.all(Array.from({ length: Math.min(concurrency, urls.length) }, worker));
 
     // 2) Embed secuencial (CPU rápido; no muta el doc de pdf-lib en paralelo).
     for (const [url, bytes] of bytesByUrl) {
