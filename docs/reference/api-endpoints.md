@@ -249,7 +249,7 @@ Crea o reutiliza un Contacto (dedup por cédula) y crea una Oportunidad en stage
 | `X-Api-Key` | Sí | Token del consumidor; se hashea y se resuelve a `consumerId`/`accountId`/`scopes` (`auth.ts:58`). NO usar `Authorization` (Catalyst lo reserva para OAuth Zoho). |
 | `Content-Type: application/json` | Sí | El body se parsea con `express.json()` (`app.ts:28`). |
 | `X-Correlation-Id` | No | UUID de correlación; si falta o no matchea el regex UUID se regenera y se devuelve en la respuesta (`auth.ts:30-37`). |
-| `X-Idempotency-Key` | No | Si viene (no vacío), activa la idempotencia de **Capa 1** en el DataStore antes de tocar Zoho (`routes/opportunity-contact.ts:31-33`). Sin él, la dedup la hace solo el CRM (Capa 2). |
+| `X-Idempotency-Key` | No | Si viene (no vacío), activa la idempotencia de **Capa 1** en el DataStore antes de tocar Zoho (`routes/opportunity-contact.ts:40-42`). Sin él, la dedup la hace solo el CRM (Capa 2). |
 
 - **Body** — validado por `opportunityContactSchema` (`packages/domain/src/schemas.ts:19-54`), en modo `.strict()`: **cualquier campo desconocido → 400 VALIDATION_ERROR** (`schemas.ts:36`). Nombres exactos (PascalCase) que se aceptan:
 
@@ -270,11 +270,11 @@ Crea o reutiliza un Contacto (dedup por cédula) y crea una Oportunidad en stage
 | `AnioVehiculo` | number (`z.coerce.number().int()`) | No | → `nota_agenda`. |
 | `MatriculaVehiculo` | string, ≤30 | No | → `nota_agenda`. |
 
-> El `accountId` (Cuenta "ML") sale SIEMPRE del token resuelto, nunca del body (`routes/opportunity-contact.ts:22`, `create-opportunity-contact.ts:24`). El schema transforma estos campos a la forma camelCase del dominio `OpportunityContactInput` (`schemas.ts:37-53`).
+> El `accountId` (Cuenta "ML") sale SIEMPRE del token resuelto, nunca del body (`routes/opportunity-contact.ts:31`, `create-opportunity-contact.ts:24`). El schema transforma estos campos a la forma camelCase del dominio `OpportunityContactInput` (`schemas.ts:37-53`).
 
 ### Response
 
-- **Éxito** — el handler traduce el `outcome.status` del use-case a HTTP (`routes/opportunity-contact.ts:40-71`):
+- **Éxito** — el handler traduce el `outcome.status` del use-case a HTTP (`routes/opportunity-contact.ts:57-88`):
 
 **201 Created** (Oportunidad nueva):
 ```json
@@ -309,13 +309,13 @@ Crea o reutiliza un Contacto (dedup por cédula) y crea una Oportunidad en stage
 
 | HTTP | code | Cuándo |
 |---|---|---|
-| 400 | `VALIDATION_ERROR` | Body no pasa `opportunityContactSchema` (campo faltante, tipo inválido, o campo extra por `.strict()`). `details.fields` = errores por campo (`routes/opportunity-contact.ts:15-19`). |
+| 400 | `VALIDATION_ERROR` | Body no pasa `opportunityContactSchema` (campo faltante, tipo inválido, o campo extra por `.strict()`). `details.fields` = errores por campo (`routes/opportunity-contact.ts:24-28`). |
 | 401 | `UNAUTHENTICATED` | Falta `X-Api-Key`, o token inválido/revocado/expirado (`auth.ts:60-76`). |
 | 403 | `FORBIDDEN_SCOPE` | El token no tiene `opportunities:create` (`auth.ts:88-96`). |
-| 409 | `IDEMPOTENCY_CONFLICT` | Misma `X-Idempotency-Key` con un payload distinto (fingerprint no coincide). `details.nroSolicitud` (`routes/opportunity-contact.ts:62-68`). |
+| 409 | `IDEMPOTENCY_CONFLICT` | Misma `X-Idempotency-Key` con un payload distinto (fingerprint no coincide). `details.nroSolicitud` (`routes/opportunity-contact.ts:79-85`). |
 | 429 | `CAP_EXCEEDED` | Se superó el cap del consumidor+endpoint. Setea `Retry-After` y `X-Cap-*` (`cap.ts:80-90`). |
-| 502 | `UPSTREAM_ERROR` | Falla escribiendo en Zoho CRM (`details.upstream: "crm"`) (`routes/opportunity-contact.ts:69-70`). |
-| 500 | `INTERNAL_ERROR` | `container`/`accountId` no resueltos tras la cadena de auth (`routes/opportunity-contact.ts:23-25`). |
+| 502 | `UPSTREAM_ERROR` | Falla escribiendo en Zoho CRM (`details.upstream: "crm"`) (`routes/opportunity-contact.ts:86-87`). |
+| 500 | `INTERNAL_ERROR` | `container`/`accountId` no resueltos tras la cadena de auth (`routes/opportunity-contact.ts:32-34`). |
 
 > Este endpoint no emite 404/422/`PDF_NOT_AVAILABLE`/`NOT_FOUND`.
 
@@ -412,6 +412,7 @@ sequenceDiagram
 - **Tenancy física:** el UNIQUE del DataStore es single-column sobre `idempotency_key`; `accountId` se filtra en la query como defensa anti-cross-access (`idempotency.ts:6-8`, `packages/persistence/src/repositories.ts:32-38`).
 - **Cap in-memory:** los contadores del cap son por contenedor caliente, no distribuidos; el blueprint pide Catalyst Cache antes de producción (`cap.ts:6-9`). El cap se evalúa DESPUÉS de auth+scope (401/403 no consumen cap).
 - **Auditoría:** exactamente 1 fila en `audit_log` al evento `finish`, con correlationId/consumerId/accountId/endpoint/outcome/httpStatus/latencyMs/errorCode — nunca payload ni PII (`middleware/audit.ts:13-38`).
+- **Inspección de payload `CARDOC_ML_DEBUG=1`** (`routes/opportunity-contact.ts:14-22, 49-55`): loggea en los Logs de la función el payload **CRUDO** inbound (antes de validar → un 400 también deja rastro de qué mandó ML) + la decisión (`outcome=created/duplicate/in_progress/conflict/error`), correlacionables por `correlationId`. ⚠️ Este body **SÍ contiene PII del consumidor final** (cédula, nombres, celular) — excepción opt-in a la política "logs sin payload", decidida por el owner (2026-08-04). El mismo flag cubre `/v1/internal/deal-estado` (ver esa sección).
 - **Envelope de error opaco:** `UpstreamError` se traduce a 502 con `details.upstream` (etiqueta opaca `"crm"`), nunca URLs ni ids internos del upstream (`middleware/errors.ts:58-61`).
 
 ---
@@ -927,7 +928,8 @@ sequenceDiagram
 - **422 vs 502 — decisión de diseño.** `invalid` (invariante de dominio: `FINALIZADO` sin `linkResultado`) nunca contacta a ML → 422; solo una falla REAL del POST a ML es 502. Reintentar contra ML no arregla un payload incompleto (`internal.ts:42-48`, `notify-estado-change.ts:49-53`).
 - **Modo de ejecución `CARDOC_ML_MODE`** (selección del adapter en `container.ts:49-50, 80-88`):
   - `http` → `MlCenterHttpClient`: POST real a AutoCheck. Cachea el JWT ~1h y re-loguea ante 401 (`mlcenter-client.ts:80-131`). Marcado STUB-grade: implementado por doc, aún sin probar contra el sandbox de ML (`mlcenter-client.ts:76-79`).
-  - `log` → `LoggingMlCenterClient`: NO llama a ML; loggea por `console.log` el **payload exacto** (PascalCase `NroSolicitud`/`Estado`/`LinkResultado`/`Observaciones`) que se POSTearía, y devuelve éxito (`mlcenter-client.ts:52-63`). Además el handler loggea el inbound + la decisión, cubriendo también `skipped`/`invalid` que no llegan al adapter (`internal.ts:30-32`).
+  - `log` → `LoggingMlCenterClient`: NO llama a ML; loggea por `console.log` el **payload exacto** (PascalCase `NroSolicitud`/`Estado`/`LinkResultado`/`Observaciones`) que se POSTearía, y devuelve éxito (`mlcenter-client.ts:52-63`). Además el handler loggea el inbound + la decisión, cubriendo también `skipped`/`invalid` que no llegan al adapter (ver `CARDOC_ML_DEBUG` abajo — mismo mecanismo).
   - cualquier otro valor (incl. sin setear) → `MockMlCenterClient`: registra las llamadas en memoria y devuelve éxito (`mlcenter-client.ts:39-45`).
+- **Inspección en prod `CARDOC_ML_DEBUG=1`** (`internal.ts:16-25, 38-42`): loggea el payload **CRUDO** inbound (antes de validar → un 400 también deja rastro) + la decisión (`outcome=sent/skipped/invalid/error`), **sin cambiar el adapter** — con `CARDOC_ML_MODE=http` las notificaciones a ML siguen saliendo. Excepción opt-in a la política "logs sin payload" (acá el body trae datos del Deal + nombre del técnico interno). El modo `log` activa estas mismas líneas sin necesidad del flag. El mismo flag también loggea el inbound de `POST /v1/opportunity-contact` (ver esa sección — ahí el payload SÍ trae PII del consumidor final).
 - **`Estado` ML tiene tilde.** El enum `MlEstado` es exactamente `"PENDIENTE" | "COORDINACIÓN" | "FINALIZADO"` (`mlcenter-client.ts:16`); el mapa lo emite con tilde (`notify-estado-change.ts:25`).
 - **Residual OQ-N6.a** (`notify-estado-change.ts:20-22`): falta confirmar que el workflow dispare sobre `Deals.Stage` y no sobre `Informes_Revision.Estado`; si fuera lo segundo, las claves de `STAGE_TO_ESTADO` cambian por los valores del picklist `Estado`.

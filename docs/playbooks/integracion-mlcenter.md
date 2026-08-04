@@ -71,7 +71,7 @@ lección de cfe: código editado en CRM = código perdido). El workflow del CRM 
 | Ruta interna (CRM → Catalyst) | `apps/catalyst/functions/api/src/routes/internal.ts` |
 | Shared-secret middleware | `requireInternalSecret` en `.../middleware/auth.ts` |
 | Schema del body | `dealEstadoSchema` en `packages/domain/src/schemas.ts` |
-| Config / flags | `CARDOC_ML_MODE`, `MLCENTER_*`, `INTERNAL_WEBHOOK_SECRET` (ver `.env.example`) |
+| Config / flags | `CARDOC_ML_MODE`, `CARDOC_ML_DEBUG` (inspección en prod sin cortar ML), `MLCENTER_*`, `INTERNAL_WEBHOOK_SECRET` (ver `.env.example`) |
 
 Estado: **scaffold listo y verificado**, alineado al contrato **v1.1** (2026-07-15: `NombreTecnico`/
 `Empresa` obligatorios end-to-end + clasificación 400/5xx). Smoke: 401 sin secret · 200 `skipped` con

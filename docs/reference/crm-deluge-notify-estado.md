@@ -74,6 +74,8 @@ el nombre del técnico (= campo primario del módulo `Inspectores`).
   el dominio del entorno prod.
 - **Inspección:** con `CARDOC_ML_MODE=log` en Catalyst, cada disparo deja en los Logs de la
   función las líneas `[ml-notify]` (inbound + payload que iría a ML) sin llamar a ML real.
+  Para inspeccionar **en prod sin cortar ML**: `CARDOC_ML_DEBUG=1` junto a `CARDOC_ML_MODE=http`
+  loggea el inbound crudo (incluye los que terminan en 400) + la decisión, y el POST real sale igual.
 - **Técnico/empresa (ML v1.1):** `nombreTecnico` = `Deals.Inspector` (lookup → `Inspectores`, campo
   primario); `empresa` = constante **`"Certia"`**. El backend los exige para todo stage notificable →
   sin ellos responde `422`, ML no se llama (en `Nueva Solicitud` no suele haber Inspector → `422`).

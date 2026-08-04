@@ -173,6 +173,13 @@ Qué se mira y cada cuánto. La fuente primaria de verdad operativa es `audit_lo
 
 - **El monitoreo no loguea PII ni bytes de PDF** — solo IDs, códigos y estado (igual que
   la auditoría y los logs de Catalyst).
+  - **Excepción activable (decisión owner 2026-08-04): `CARDOC_ML_DEBUG=1`** (Console →
+    Environment Variables + redeploy) loguea el payload inbound **crudo** + la decisión en
+    `POST /v1/opportunity-contact` (⚠️ **PII del consumidor final**: cédula/nombres/celular) y
+    `POST /v1/internal/deal-estado`, sin cambiar adapters — ML/CRM siguen operando normal.
+    Uso esperado: **prender para investigar, apagar al terminar** — con el flag activo, la
+    retención de logs de Catalyst pasa a ser retención de PII (jurisdicciones UY/AR/US).
+    Detalle técnico: [api-endpoints.md](docs/reference/api-endpoints.md) + `.env.example`.
 - **Herramienta de alerting/tablero ⚙️**: dentro del ecosistema Zoho (Catalyst observabilidad
   nativa / ManageEngine), a definir en E-02. **Quotas, retención de logs y cold-start del
   plan ⚠️ verificar** (consola Catalyst) — alimentan los umbrales de este apartado.

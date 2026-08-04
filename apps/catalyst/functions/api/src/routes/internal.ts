@@ -13,6 +13,16 @@ import { ApiError, asyncHandler } from "../middleware/errors";
 
 export const dealEstadoHandler: RequestHandler = asyncHandler<AuthedRequest>(async (req, res): Promise<void> => {
   req.endpoint = "internal-deal-estado";
+  // Inspección: CARDOC_ML_MODE=log (dev, no llama a ML) o CARDOC_ML_DEBUG=1 (prod, SÍ llama a ML).
+  // Loggea el payload CRUDO antes de validar, así un 400 también deja rastro de qué mandó el CRM.
+  // Excepción deliberada y opt-in a la política "logs sin payload" (ATRIBUTOS-DE-CALIDAD): el body
+  // trae solo datos del Deal + nombre del técnico interno, no PII del consumidor final.
+  const mlInspect = process.env["CARDOC_ML_MODE"] === "log" || process.env["CARDOC_ML_DEBUG"] === "1";
+  if (mlInspect) {
+    console.log(
+      `[ml-notify] inbound /deal-estado correlationId=${req.correlationId ?? "-"} payload=${JSON.stringify(req.body)}`,
+    );
+  }
   const parsed = dealEstadoSchema.safeParse(req.body);
   if (!parsed.success) {
     throw new ApiError(400, "VALIDATION_ERROR", "payload inválido", { fields: parsed.error.flatten().fieldErrors });
@@ -25,10 +35,10 @@ export const dealEstadoHandler: RequestHandler = asyncHandler<AuthedRequest>(asy
   const correlationId = req.correlationId ?? "";
   const outcome = await notifyEstadoChange(parsed.data, { mlCenter: container.mlCenter });
 
-  // Modo inspección (CARDOC_ML_MODE=log): loggea lo que LLEGÓ + la decisión (cubre también los
-  // 'skipped'/'invalid' que no llegan al adapter). El payload real a ML lo loggea LoggingMlCenterClient.
-  if (process.env["CARDOC_ML_MODE"] === "log") {
-    console.log(`[ml-notify] (log-mode) inbound /deal-estado ${JSON.stringify(parsed.data)} -> outcome=${outcome.status}`);
+  // La decisión también se loggea bajo inspección (cubre 'skipped'/'invalid', que no llegan al
+  // adapter). El payload exacto hacia ML lo loggea LoggingMlCenterClient (solo en modo log).
+  if (mlInspect) {
+    console.log(`[ml-notify] correlationId=${correlationId || "-"} /deal-estado -> outcome=${outcome.status}`);
   }
 
   switch (outcome.status) {
