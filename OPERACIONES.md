@@ -30,8 +30,8 @@ consola/docs oficiales de Catalyst antes de operar en producción (ver [§8](#8-
 | Entorno | Proyecto Catalyst | Persistencia | CRM / Reports | Uso |
 |---------|-------------------|--------------|---------------|-----|
 | `local` | — (sin Catalyst) | `memory` | `mock` / `mock` | Desarrollo en máquina. Token sembrado `X-Api-Key: test-token` (todos los scopes, Cuenta `acc_dev`). |
-| `dev` | cardoc-dev ⚙️ | `datastore` | `mock`/`mock` o adapters reales en sandbox | Integración + smoke e2e en plataforma real. |
-| `prod` | cardoc-prod ⚙️ | `datastore` | `zoho` / `creator` | Automotoras reales — **solo** se llega por pipeline. |
+| `dev` | **ML** (`57305000000083001`) — env **Development** | `datastore` | `mock`/`mock` o adapters reales en sandbox | Integración + smoke e2e en plataforma real. URL `…909785950.development.catalystserverless.com`. |
+| `prod` | **ML** (`57305000000083001`) — env **Production** (confirmado 2026-08-04) | `datastore` | `zoho` / `creator` | Automotoras reales — **solo** por promoción desde consola (ver §2), referenciando tag de git. |
 
 El entorno lo gobiernan las **variables de entorno** (no flags de código): `CARDOC_PERSISTENCE`
 (`datastore` | otro→in-memory), `CARDOC_CRM_MODE` (`zoho` | otro→`MockCrmClient`),
@@ -113,12 +113,20 @@ Configs versionadas: `apps/catalyst/catalyst.json` (`functions.source: 'function
 (`deployment: { name:'api', stack:'node24', type:'advancedio' }`, `execution.main: 'index.js'`).
 Timezone del proyecto: `America/Montevideo`.
 
+- **Prod = promoción por consola, NO por CLI.** `catalyst deploy` (CLI v1.26) publica **solo al
+  env Development** (lo declara su propio help; no hay comando CLI para Production). El pase a
+  prod se hace en la consola: proyecto ML → Environments → **Deploy to Production**, siempre
+  referenciando el tag de git del release. Las **Env Vars y Security Rules de Production son
+  propias del entorno** (no se heredan de Development): configurar `CARDOC_*`/secretos de prod
+  y `authentication: optional` en la función ANTES de la primera promoción.
 - **Comando exacto de rollback y de pin de versión por deploy ⚠️ verificar** (docs/consola
   Catalyst). El modelo objetivo: rollback = redeploy del tag de git anterior (1 paso).
 - **Todo deploy a prod referencia un tag de git** — trazabilidad release ↔ código.
 - **Smoke post-deploy obligatorio**: `GET /v1/health` (abierto) + 1 `POST /v1/opportunity-contact`
   por el pipeline completo contra datos de prueba. Si falla → rollback inmediato y se
-  diagnostica desde la versión estable.
+  diagnostica desde la versión estable. `scripts/smoke-catalyst.mjs` acepta overrides para
+  entornos con datastore/adapters reales: `BASE`, `SMOKE_TOKEN` (consumidor real), `SMOKE_NRO`
+  (NroSolicitud único por corrida) y `SMOKE_INFORME_ID` (los defaults asumen dev memory+mock).
 
 ## 3. Onboarding de una automotora nueva (checklist)
 

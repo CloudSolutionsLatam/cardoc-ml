@@ -1,14 +1,23 @@
-// Smoke e2e contra la función DESPLEGADA en Catalyst (modo memory+mock).
+// Smoke e2e contra la función DESPLEGADA en Catalyst.
 // Uso: NODE_OPTIONS=--use-system-ca pnpm smoke:catalyst   (la CA del sistema es necesaria
-// en la red corporativa). Override de destino: BASE=<url> pnpm smoke:catalyst
+// en la red corporativa). Los defaults asumen dev en modo memory+mock (fixture `test-token`).
+// Overrides para entornos con datastore/adapters reales (dev real o prod post-promoción):
+//   BASE=<url>                 destino (prod: sin `.development`)
+//   SMOKE_TOKEN=<token>        X-Api-Key de un consumidor REAL sembrado en consumer_tokens
+//   SMOKE_NRO=<n>              NroSolicitud base ÚNICO por corrida (datastore persiste: reusar
+//                              el mismo n convierte los `created` esperados en `duplicate`)
+//   SMOKE_INFORME_ID=<id>      informe existente de la cuenta del token, para el check del PDF
+// OJO en prod con CRM real: el POST crea Contacto+Deal de verdad — usar datos de prueba (§2 OPERACIONES).
 const base = process.env.BASE || "https://ml-909785950.development.catalystserverless.com/server/api";
 let pass = 0, fail = 0;
 const check = (name, cond, extra = "") =>
   cond ? (pass++, console.log(`  PASS  ${name}`)) : (fail++, console.log(`  FAIL  ${name}  ${extra}`));
 
-const AUTH = { "X-Api-Key": "test-token" };
+const AUTH = { "X-Api-Key": process.env.SMOKE_TOKEN || "test-token" };
 const JSONH = { ...AUTH, "Content-Type": "application/json" };
-const body = { NroCedula: 45321890, NroSolicitud: 908812, Nombres: "Juan Carlos", Apellidos: "Pérez Rodríguez", CelularCliente: "099123456", MarcaVehiculo: "Chevrolet", ModeloVehiculo: "Onix", AnioVehiculo: 2022, MatriculaVehiculo: "SBA1234" };
+const NRO = Number(process.env.SMOKE_NRO) || 908812;
+const INFORME_ID = process.env.SMOKE_INFORME_ID || "acc_dev-INF-001";
+const body = { NroCedula: 45321890, NroSolicitud: NRO, Nombres: "Juan Carlos", Apellidos: "Pérez Rodríguez", CelularCliente: "099123456", MarcaVehiculo: "Chevrolet", ModeloVehiculo: "Onix", AnioVehiculo: 2022, MatriculaVehiculo: "SBA1234" };
 
 console.log(`base = ${base}\n`);
 
@@ -35,9 +44,10 @@ r = await fetch(`${base}/v1/opportunity-contact`, { method: "POST", headers: JSO
 j = await r.json().catch(() => ({}));
 check("POST repetido mismo NroSolicitud (sin header) → 200 duplicate (Capa 2)", r.status === 200 && j.status === "duplicate", `${r.status}`);
 
-// Capa 1 (con X-Idempotency-Key): created → conflict (misma clave, payload distinto)
-const IDEM = { ...JSONH, "X-Idempotency-Key": "smoke-cat-1" };
-const body1 = { ...body, NroSolicitud: 908850 };
+// Capa 1 (con X-Idempotency-Key): created → conflict (misma clave, payload distinto).
+// La key incorpora el NRO para que cada corrida con SMOKE_NRO nuevo estrene key (datastore persiste).
+const IDEM = { ...JSONH, "X-Idempotency-Key": `smoke-cat-${NRO}` };
+const body1 = { ...body, NroSolicitud: NRO + 38 };
 r = await fetch(`${base}/v1/opportunity-contact`, { method: "POST", headers: IDEM, body: JSON.stringify(body1) });
 j = await r.json().catch(() => ({}));
 check("POST con idem-key → 201 created (Capa 1)", r.status === 201 && j.status === "created", `${r.status} ${JSON.stringify(j)}`);
@@ -51,7 +61,7 @@ j = await r.json().catch(() => ({}));
 check("GET /v1/informes → 200 data[]", r.status === 200 && Array.isArray(j.data), `${r.status}`);
 check("  X-Cap-Remaining presente", Boolean(r.headers.get("x-cap-remaining")));
 
-r = await fetch(`${base}/v1/informes/acc_dev-INF-001/pdf`, { headers: AUTH });
+r = await fetch(`${base}/v1/informes/${INFORME_ID}/pdf`, { headers: AUTH });
 const buf = Buffer.from(await r.arrayBuffer());
 check("GET /v1/informes/:id/pdf → 200 application/pdf (streaming)", r.status === 200 && r.headers.get("content-type") === "application/pdf", `${r.status} ${r.headers.get("content-type")}`);
 check("  cuerpo es un PDF (%PDF)", buf.toString("utf8").startsWith("%PDF"));
