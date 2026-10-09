@@ -36,6 +36,7 @@ import {
   MlCenterHttpClient,
   ZohoCreatorReportsSource,
   ZohoCrmClient,
+  ZohoTokenProvider,
   type CreatorConnection,
   type CrmClient,
   type CrmConnection,
@@ -125,11 +126,30 @@ function resolveCrmConnection(catalystApp: unknown): CrmConnection {
   };
 }
 
+/**
+ * Token de Zoho memoizado a nivel MÓDULO (sobrevive entre requests del contenedor caliente) con
+ * fallback a refresh directo si el SDK/Cache de Catalyst falla (incidente 2026-10-09: free tier del
+ * Cache agotado → `FREE_USAGE_LIMIT_REACHED`). Compartido por CRM y Creator (mismo self-client).
+ */
+const zohoTokens = new ZohoTokenProvider({
+  selfClient: () => ({
+    clientId: process.env["ZOHO_CLIENT_ID"],
+    clientSecret: process.env["ZOHO_CLIENT_SECRET"],
+    refreshToken: process.env["ZOHO_REFRESH_TOKEN"],
+    accountsUrl: process.env["ZOHO_ACCOUNTS_URL"],
+  }),
+  onFallback: (reason) => console.warn(`[zoho-token] SDK/Cache falló (${reason}) → refresh directo`),
+});
+
 async function resolveZohoAccessToken(catalystApp: unknown): Promise<string> {
   // Override directo (testing local / token de corta vida) — evita el SDK.
   const direct = process.env["ZOHO_CRM_ACCESS_TOKEN"];
   if (direct) return direct;
-  // Self-client: el SDK de Catalyst renueva el access token con las creds en env vars.
+  return zohoTokens.getAccessToken(() => sdkConnectorAccessToken(catalystApp));
+}
+
+/** Camino principal: el SDK de Catalyst renueva el access token con las creds en env vars (vía Cache). */
+async function sdkConnectorAccessToken(catalystApp: unknown): Promise<string> {
   const app = catalystApp as {
     connection(cfg: Record<string, unknown>): {
       getConnector(name: string): { getAccessToken(): Promise<string> };
