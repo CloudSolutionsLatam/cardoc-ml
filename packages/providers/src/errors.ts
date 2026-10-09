@@ -16,6 +16,26 @@ export class UpstreamError extends Error {
   }
 }
 
+/**
+ * Mensaje legible de algo lanzado/rechazado, para logs. El SDK de Catalyst (`zcatalyst-sdk-node`)
+ * rechaza sus llamadas HTTP no-2xx (refresh del token, Cache) con un OBJETO PLANO
+ * `{statusCode, code, message}`, no un `Error` → `String(e)` daba "[object Object]".
+ * Solo se leen esos 3 campos (nunca el objeto entero: podría traer la config de la request con secretos).
+ */
+export function describeThrown(e: unknown): string {
+  if (e instanceof Error) return e.message;
+  if (e !== null && typeof e === "object") {
+    const o = e as Record<string, unknown>;
+    const parts = [
+      o["statusCode"] != null ? `HTTP ${String(o["statusCode"])}` : "",
+      o["code"] != null ? String(o["code"]) : "",
+      o["message"] != null ? String(o["message"]) : "",
+    ].filter(Boolean);
+    return parts.length > 0 ? parts.join(" ").slice(0, 300) : "objeto sin statusCode/code/message";
+  }
+  return String(e);
+}
+
 /** Adapter no implementado (scaffolding stub). */
 export class NotImplementedError extends Error {
   constructor(adapter: string, op: string) {

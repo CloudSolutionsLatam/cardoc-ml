@@ -112,6 +112,16 @@ describe("ZohoCrmClient.createContact", () => {
     const badConn: CrmConnection = { ...conn, getAccessToken: async () => Promise.reject(new Error("invalid_code")) };
     await expect(new ZohoCrmClient({ fetchFn }).createContact(data, badConn)).rejects.toThrow(/token CRM: invalid_code/);
   });
+
+  it("el SDK de Catalyst rechaza con OBJETO PLANO {statusCode,code,message} → legible, no '[object Object]'", async () => {
+    const { fetchFn } = fake(() => json({}));
+    const sdkReject = { statusCode: 400, code: "INVALID_INPUT", message: "segment not found", config: { client_secret: "S3CRET" } };
+    const badConn: CrmConnection = { ...conn, getAccessToken: async () => Promise.reject(sdkReject) };
+    const err = await new ZohoCrmClient({ fetchFn }).createContact(data, badConn).catch((e: Error) => e);
+    expect(String(err)).toContain("token CRM: HTTP 400 INVALID_INPUT segment not found");
+    expect(String(err)).not.toContain("[object Object]");
+    expect(String(err)).not.toContain("S3CRET"); // solo statusCode/code/message, nunca el objeto entero
+  });
 });
 
 describe("ZohoCrmClient — errores de search", () => {

@@ -4,7 +4,7 @@
  * nivel código — hay un bug de Catalyst Connection con el refresh token) y la pasa en
  * `CrmConnection.getAccessToken()`. El adapter nunca lee secretos por su cuenta.
  */
-import { UpstreamError } from "./errors";
+import { UpstreamError, describeThrown } from "./errors";
 
 /**
  * Conexión de runtime al CRM. La FUNCIÓN arma el resolvedor del token (self-client con el
@@ -374,7 +374,7 @@ export class ZohoCrmClient implements CrmClient {
       token = await conn.getAccessToken();
     } catch (e) {
       // Refresh del self-client caído (refresh token revocado, creds de env mal cargadas…).
-      throw new UpstreamError("crm", 0, `token CRM: ${e instanceof Error ? e.message : String(e)}`);
+      throw new UpstreamError("crm", 0, `token CRM: ${describeThrown(e)}`);
     }
     try {
       return await this.fetchFn(url, {

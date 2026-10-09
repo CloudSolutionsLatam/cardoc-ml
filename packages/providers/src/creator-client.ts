@@ -12,7 +12,7 @@
  */
 import type { RawInspectionReport } from "./report-transform";
 import type { ImageFetcher } from "./pdf-generator";
-import { UpstreamError } from "./errors";
+import { UpstreamError, describeThrown } from "./errors";
 
 type FetchFn = typeof fetch;
 
@@ -71,7 +71,7 @@ export function createReportDetailFetcher(conn: CreatorConnection, fetchFn: Fetc
       try {
         headers["Authorization"] = `Zoho-oauthtoken ${await conn.getAccessToken()}`;
       } catch (e) {
-        throw new UpstreamError("creator", 502, `token OAuth Creator: ${(e as Error).message}`);
+        throw new UpstreamError("creator", 502, `token OAuth Creator: ${describeThrown(e)}`);
       }
     }
     let res: Awaited<ReturnType<FetchFn>>;
