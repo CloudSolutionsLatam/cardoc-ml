@@ -58,6 +58,7 @@ describe("ZohoCrmClient.createContact", () => {
     expect(rec["Cedula"]).toBe("45321890"); // TEXT en Zoho
     expect(rec["Mobile"]).toBe("099");
     expect(rec["Account_Name"]).toEqual({ id: "ACC-ML" });
+    expect(rec["Genero"]).toBe("Otro"); // relleno obligatorio del layout (OQ-N11)
   });
 
   it("código != SUCCESS (HTTP 200) → UpstreamError", async () => {
@@ -75,6 +76,52 @@ describe("ZohoCrmClient.createContact", () => {
       json({ data: [{ code: "MANDATORY_NOT_FOUND", status: "error", message: "required field missing" }] }, 400),
     );
     await expect(new ZohoCrmClient({ fetchFn }).createContact(data, conn)).rejects.toThrow(/MANDATORY_NOT_FOUND/);
+  });
+
+  it("MANDATORY_NOT_FOUND → el mensaje nombra el campo obligatorio (api_name), sin valores del payload", async () => {
+    const { fetchFn } = fake(() =>
+      json(
+        {
+          data: [
+            {
+              code: "MANDATORY_NOT_FOUND",
+              status: "error",
+              message: "required field not found",
+              details: { api_name: "Genero", json_path: "$.data[0].Genero", value: "45321890" },
+            },
+          ],
+        },
+        400,
+      ),
+    );
+    const err = await new ZohoCrmClient({ fetchFn }).createContact(data, conn).catch((e: Error) => e);
+    expect(String(err)).toContain("HTTP 400 MANDATORY_NOT_FOUND: required field not found");
+    expect(String(err)).toContain('"api_name":"Genero"');
+    expect(String(err)).not.toContain("45321890"); // `details.value` (PII) se filtra
+  });
+
+  it("error top-level (sin data[], p.ej. INVALID_TOKEN) → surfacea code/message", async () => {
+    const { fetchFn } = fake(() => json({ code: "INVALID_TOKEN", status: "error", message: "invalid oauth token" }, 401));
+    await expect(new ZohoCrmClient({ fetchFn }).createContact(data, conn)).rejects.toThrow(
+      /HTTP 401 INVALID_TOKEN: invalid oauth token/,
+    );
+  });
+
+  it("falla del token (refresh self-client) → UpstreamError 'token CRM: …'", async () => {
+    const { fetchFn } = fake(() => json({}));
+    const badConn: CrmConnection = { ...conn, getAccessToken: async () => Promise.reject(new Error("invalid_code")) };
+    await expect(new ZohoCrmClient({ fetchFn }).createContact(data, badConn)).rejects.toThrow(/token CRM: invalid_code/);
+  });
+});
+
+describe("ZohoCrmClient — errores de search", () => {
+  it("search no-OK → el mensaje trae el code/message de Zoho, no solo el HTTP", async () => {
+    const { fetchFn } = fake(() =>
+      json({ code: "INVALID_QUERY", status: "error", message: "invalid query formed", details: { api_name: "Cedula" } }, 400),
+    );
+    await expect(new ZohoCrmClient({ fetchFn }).findContactByCedula(1, conn)).rejects.toThrow(
+      /Contacts\/search HTTP 400 INVALID_QUERY: invalid query formed \{"api_name":"Cedula"\}/,
+    );
   });
 });
 
@@ -126,6 +173,7 @@ describe("ZohoCrmClient.createOpportunity", () => {
     expect(rec["Stage"]).toBe("Nueva Solicitud");
     expect(rec["Contact_Name"]).toEqual({ id: "C9" });
     expect(rec["EXTERNAL_ID"]).toBe("908812"); // string, no number (BIGINT)
+    expect(rec["Servicio_Cotizado"]).toBe("Revision Vehicular"); // obligatorio en el layout (2026-10)
     expect(String(rec["nota_agenda"])).toContain("Chevrolet Onix 2022");
     expect(String(rec["nota_agenda"])).toContain("SBA1234");
   });

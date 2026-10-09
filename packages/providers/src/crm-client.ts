@@ -35,6 +35,7 @@ export const ZOHO_CRM_FIELDS = {
     mobile: "Mobile", //          OJO: este CRM no tiene campo "Phone"
     email: "Email",
     account: "Account_Name", //   lookup → Accounts (así cuelga la Cuenta "ML")
+    genero: "Genero", //          picklist; obligatorio en el layout desde ~2026-10-08 (OQ-N11)
   },
   /** Deals — campos que escribe `createOpportunity`. */
   deal: {
@@ -43,6 +44,7 @@ export const ZOHO_CRM_FIELDS = {
     pipeline: "Pipeline", //      system_mandatory; valor = ZOHO_FIXED_PIPELINE
     contact: "Contact_Name", //   lookup → Contacts
     externalId: "EXTERNAL_ID", // custom ← NroSolicitud (ADR-0002)
+    servicioCotizado: "Servicio_Cotizado", // picklist; obligatorio en el layout desde ~2026-10-08
     // Agenda (fase posterior): Inspector→Inspectores, Vehiculo→Products,
     // Fecha_y_hora_de_visita_programada, nota_agenda, Ciudad/Calle/N_mero/Estado.
   },
@@ -66,6 +68,22 @@ export const ZOHO_CRM_FIELDS = {
  * inconsistente y Zoho lo rechaza. Confirmado vía `settings/pipeline` (Nestor 2026-06-30).
  */
 export const ZOHO_FIXED_PIPELINE = "B2B" as const;
+
+/**
+ * Servicio cotizado fijo del Deal. Cardoc lo marcó obligatorio en el layout Standard de Deals
+ * entre el 2026-10-07 y el 2026-10-09 → sin él Zoho rechaza el alta (502 UPSTREAM_ERROR a ML).
+ * Es el valor que tienen TODOS los Deals de ML ya creados (verificado en CRM 2026-10-09).
+ */
+export const ZOHO_FIXED_SERVICIO_COTIZADO = "Revision Vehicular" as const;
+
+/**
+ * ⚠️ PARCHE (OQ-N11, Nestor 2026-10-09): `Contacts.Genero` pasó a obligatorio en el layout y ML
+ * NO manda género → sin valor, toda alta de Contacto nuevo se rechaza. Se envía `"Otro"` como
+ * relleno: NO es un dato real del cliente. Solo aplica al CREAR (los Contactos reusados por
+ * cédula no se tocan). Identificables para limpieza: Account = ML + creados por el self-client.
+ * Salida: Cardoc agrega un valor "No informado" (y se cambia acá) o ML suma el dato al contrato.
+ */
+export const ZOHO_GENERO_SIN_DATO = "Otro" as const;
 
 /** Datos del Contacto a crear (de lo que manda ML). Dedup por `nroCedula`. */
 export interface CrmContactData {
@@ -178,6 +196,36 @@ interface ZohoWriteResponse {
     duplicate_record?: { id?: string };
   }>;
 }
+/** Error de Zoho: por-registro (`data[0]`) o top-level (p.ej. `INVALID_TOKEN`, sin `data`). */
+interface ZohoErrorShape {
+  code?: string;
+  message?: string;
+  details?: Record<string, unknown>;
+}
+
+/**
+ * Claves de `details` que dicen QUÉ campo falló y por qué (p.ej. MANDATORY_NOT_FOUND →
+ * `api_name: "Genero"`) sin traer valores del payload (PII: cédula, nombres, celular).
+ */
+const SAFE_DETAIL_KEYS = new Set(["api_name", "json_path", "expected_data_type", "maximum_length", "minimum_length"]);
+
+/**
+ * Motivo legible del rechazo de Zoho para el log: `HTTP <s> <CODE>: <message> {api_name,...}`.
+ * Exportado para test.
+ */
+export function describeZohoError(err: ZohoErrorShape | undefined, httpStatus: number): string {
+  if (!err?.code) return `HTTP ${httpStatus}`;
+  const safe = Object.fromEntries(Object.entries(err.details ?? {}).filter(([k]) => SAFE_DETAIL_KEYS.has(k)));
+  const detail = Object.keys(safe).length > 0 ? ` ${JSON.stringify(safe)}` : "";
+  return `HTTP ${httpStatus} ${err.code}${err.message ? `: ${err.message}` : ""}${detail}`;
+}
+
+/** Lee el error de Zoho de una respuesta no-OK (tolera body vacío / no-JSON). */
+async function readZohoError(res: FetchResponse): Promise<ZohoErrorShape | undefined> {
+  const json = await parseCrmJson<ZohoErrorShape & { data?: ZohoErrorShape[] }>(res).catch(() => undefined);
+  return json?.data?.[0] ?? json;
+}
+
 /** Respuesta del endpoint de búsqueda (`GET /crm/v2/<Module>/search`). */
 interface ZohoSearchResponse {
   data?: Array<{ id?: string }>;
@@ -244,6 +292,7 @@ export class ZohoCrmClient implements CrmClient {
       [f.firstName]: data.nombres,
       [f.cedula]: String(data.nroCedula), // `Cedula` es campo TEXT en Zoho (no number)
       [f.account]: { id: data.accountId },
+      [f.genero]: ZOHO_GENERO_SIN_DATO, // relleno (OQ-N11): ML no manda género
     };
     if (data.celular) record[f.mobile] = data.celular;
     return this.createRecord(ZOHO_CRM_FIELDS.modules.contacts, record, conn);
@@ -257,6 +306,7 @@ export class ZohoCrmClient implements CrmClient {
       [f.stage]: data.stage,
       [f.contact]: { id: data.contactId },
       [f.externalId]: String(data.nroSolicitud), // externo/BIGINT siempre como string
+      [f.servicioCotizado]: ZOHO_FIXED_SERVICIO_COTIZADO,
     };
     const nota = composeNotaAgenda(data);
     if (nota) record["nota_agenda"] = nota;
@@ -268,7 +318,9 @@ export class ZohoCrmClient implements CrmClient {
     const url = `${crmBase(conn)}/${module}/search?criteria=${encodeURIComponent(criteria)}`;
     const res = await this.request(url, { method: "GET" }, conn);
     if (res.status === 204) return null; // Zoho devuelve 204 cuando no hay coincidencias
-    if (!res.ok) throw new UpstreamError("crm", res.status, `${module}/search HTTP ${res.status}`);
+    if (!res.ok) {
+      throw new UpstreamError("crm", res.status, `${module}/search ${describeZohoError(await readZohoError(res), res.status)}`);
+    }
     const json = await parseCrmJson<ZohoSearchResponse>(res);
     const id = json.data?.[0]?.id;
     return id ? String(id) : null;
@@ -279,7 +331,9 @@ export class ZohoCrmClient implements CrmClient {
     const url = `${crmBase(conn)}/${module}/search?criteria=${encodeURIComponent(criteria)}`;
     const res = await this.request(url, { method: "GET" }, conn);
     if (res.status === 204) return null;
-    if (!res.ok) throw new UpstreamError("crm", res.status, `${module}/search HTTP ${res.status}`);
+    if (!res.ok) {
+      throw new UpstreamError("crm", res.status, `${module}/search ${describeZohoError(await readZohoError(res), res.status)}`);
+    }
     const json = await parseCrmJson<{ data?: Array<Record<string, unknown>> }>(res);
     return json.data?.[0] ?? null;
   }
@@ -295,7 +349,7 @@ export class ZohoCrmClient implements CrmClient {
       conn,
     );
     // Zoho responde por-registro; parseamos el body (tolerando no-JSON) para leer el code real.
-    const json = await parseCrmJson<ZohoWriteResponse>(res).catch(() => undefined);
+    const json = await parseCrmJson<ZohoWriteResponse & ZohoErrorShape>(res).catch(() => undefined);
     const row = json?.data?.[0];
     // Idempotencia de la BASE: si el campo único (EXTERNAL_ID) ya existe, Zoho responde
     // DUPLICATE_DATA con el registro existente → lo tratamos como "ya existía" (no error).
@@ -304,9 +358,8 @@ export class ZohoCrmClient implements CrmClient {
       return { id: String(dupId), duplicate: true };
     }
     if (!res.ok || row?.code !== "SUCCESS" || !row?.details?.id) {
-      const detail = row?.details ? ` ${JSON.stringify(row.details)}` : "";
-      const reason = row?.code ? `${row.code}${row.message ? `: ${row.message}` : ""}${detail}` : `HTTP ${res.status}`;
-      throw new UpstreamError("crm", res.status, `${module} create rechazado (${reason})`);
+      // Por-registro (data[0], p.ej. MANDATORY_NOT_FOUND + api_name) o top-level (INVALID_TOKEN…).
+      throw new UpstreamError("crm", res.status, `${module} create rechazado (${describeZohoError(row ?? json, res.status)})`);
     }
     return { id: String(row.details.id), duplicate: false };
   }
@@ -316,7 +369,13 @@ export class ZohoCrmClient implements CrmClient {
     init: { method: string; headers?: Record<string, string>; body?: string },
     conn: CrmConnection,
   ): Promise<FetchResponse> {
-    const token = await conn.getAccessToken();
+    let token: string;
+    try {
+      token = await conn.getAccessToken();
+    } catch (e) {
+      // Refresh del self-client caído (refresh token revocado, creds de env mal cargadas…).
+      throw new UpstreamError("crm", 0, `token CRM: ${e instanceof Error ? e.message : String(e)}`);
+    }
     try {
       return await this.fetchFn(url, {
         method: init.method,

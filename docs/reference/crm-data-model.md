@@ -56,6 +56,7 @@ La idempotencia Capa 1 se apoya en `UNIQUE(idempotency_key)` (single-column; el 
 | `celularCliente` | `Mobile` | phone (30) | **OJO: no existe `Phone`** en este CRM; el teléfono de persona es `Mobile`. |
 | (Cuenta "ML") | `Account_Name` | lookup → `Accounts` | **Decisión CRM-Q3:** la Cuenta "ML" se asocia **acá** (el Deal no lleva Cuenta). |
 | — | `Email` | email (100) | ML no manda email. |
+| ⚠️ (fijo, relleno) | `Genero` | picklist (`Masculino`/`Femenino`/`Otro`) | **Obligatorio en el layout Standard desde ~2026-10-08** (cambio de Cardoc en el CRM; el 2026-10-07 un alta sin él fue aceptada). ML **no manda género** → rompía toda alta de Contacto nuevo (incidente 2026-10-09). **Parche (Nestor 2026-10-09):** se envía `"Otro"` (`ZOHO_GENERO_SIN_DATO`) solo al crear — **no es dato real**. Ver OQ-N11. |
 
 ## `Deals` — `createOpportunity`
 
@@ -66,6 +67,7 @@ La idempotencia Capa 1 se apoya en `UNIQUE(idempotency_key)` (single-column; el 
 | (fijo) | `Pipeline` | picklist | **`system_mandatory`**. Valor = **`"B2B"`** (`ZOHO_FIXED_PIPELINE`). `Nueva Solicitud` es stage de este pipeline, no del `Standard`. |
 | (contacto creado) | `Contact_Name` | lookup → `Contacts` | `{ "Contact_Name": { "id": "<contactId>" } }`. |
 | `nroSolicitud` | `EXTERNAL_ID` | (custom) | **No estaba en el dump** (creado 2026-06-30). |
+| (fijo) | `Servicio_Cotizado` | picklist | **Obligatorio en el layout Standard desde ~2026-10-08.** Valor = **`"Revision Vehicular"`** (`ZOHO_FIXED_SERVICIO_COTIZADO`) — el que tienen todos los Deals de ML. |
 | `marca`/`modelo`/`anio`/`matricula` (+ sucursal/dir.) | `nota_agenda` | textarea | **Decisión CRM-Q4:** el adapter compone un texto con el vehículo + sucursal y lo escribe acá. **No** se modela `Products`. |
 
 **Agenda (opcional, fase posterior)** — campos reales en Deals si se decide poblarlos:

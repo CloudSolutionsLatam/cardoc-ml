@@ -84,6 +84,12 @@ export const opportunityContactHandler: RequestHandler = asyncHandler<AuthedRequ
         { nroSolicitud },
       );
     case "error":
+      // Motivo real del CRM SIEMPRE al log (no solo bajo debug): sin esto un 502 es una caja negra.
+      // El mensaje lo arma el adapter (code + api_name del campo culpable), sin valores del payload.
+      // Al consumidor le sigue llegando el sobre opaco.
+      console.error(
+        `[opp-contact] correlationId=${correlationId || "-"} nroSolicitud=${nroSolicitud} crm error: ${outcome.message}`,
+      );
       throw new ApiError(502, "UPSTREAM_ERROR", "no se pudo crear en CRM", { upstream: "crm" });
   }
 });
