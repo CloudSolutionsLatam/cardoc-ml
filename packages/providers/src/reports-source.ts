@@ -10,11 +10,19 @@ import type { InformeReport, InformeRevision, ListInformesQuery, Page } from "@c
 import { availableParallelism } from "node:os";
 import { Readable } from "node:stream";
 import { NotImplementedError, ReportNotFoundError, UpstreamError } from "./errors";
-import type { ImageOptimizer } from "./image-optimizer";
+import { limitConcurrency, type ImageOptimizer } from "./image-optimizer";
 import { PdfLibReportGenerator, type ImageFetcher, type PdfGenerator, type PhotoStats } from "./pdf-generator";
 import { transformReportData } from "./report-transform";
 import type { ReportDetailFetcher } from "./creator-client";
 import { PORTAL_TYPE, shouldRejectDetailByPortalType } from "./portal-type";
+
+/**
+ * UNA generación de PDF a la vez por proceso (no por request: el container se arma por request).
+ * Cada generación pesada ocupa ~250 MB; dos a la vez superan los 512 MB de Catalyst, el proceso muere
+ * y se caen TODAS sus requests en curso (dev 2026-10-15: 2 PDFs en paralelo → ambos 200 vacío; en prod
+ * el 13/10 ML pedía 2 PDFs con 1 s de diferencia). Las demás esperan su turno (~10 s c/u).
+ */
+const pdfGenerationSlot = limitConcurrency(1);
 
 /** Resultado del stream del PDF: el `Readable` se pipea directo al `res` de Express. */
 export interface ReportPdf {
@@ -289,12 +297,17 @@ export class ZohoCreatorReportsSource implements ReportsSource {
       throw new ReportNotFoundError(id);
     }
     const informe = transformReportData(result);
-    const tGen0 = Date.now();
-    const bytes = await this.gen.generate(informe);
+    const tQueue0 = Date.now();
+    let tGen0 = tQueue0;
+    const bytes = await pdfGenerationSlot(() => {
+      tGen0 = Date.now();
+      return this.gen.generate(informe);
+    });
+    const colaMs = tGen0 - tQueue0;
     // Telemetría de fases (logs de la función): permite diagnosticar dónde se va el tiempo EN EL
     // ENTORNO REAL (la ventana de Advanced I/O es 30s y el óptimo de concurrencia varía por entorno).
     console.log(
-      `[pdf] id=${id} detailMs=${tDetail} genMs=${Date.now() - tGen0} pdfBytes=${bytes.length} componentes=${informe.detalles.length}`,
+      `[pdf] id=${id} detailMs=${tDetail} colaMs=${colaMs} genMs=${Date.now() - tGen0} pdfBytes=${bytes.length} componentes=${informe.detalles.length}`,
     );
     return {
       stream: pdfStream(bytes),

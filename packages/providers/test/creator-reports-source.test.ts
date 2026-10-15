@@ -227,3 +227,28 @@ describe("describePhotoStats — línea [pdf-fotos] (ADR-0016)", () => {
     expect(line).not.toMatch(/https?:/);
   });
 });
+
+describe("ZohoCreatorReportsSource — una generación de PDF a la vez por proceso", () => {
+  it("dos requests simultáneos (cada uno con su instancia, como en prod) NO generan en paralelo y ambos terminan", async () => {
+    let active = 0;
+    let peak = 0;
+    const slowGenerator = {
+      generate: async () => {
+        active++;
+        peak = Math.max(peak, active);
+        await new Promise((r) => setTimeout(r, 30));
+        active--;
+        return new Uint8Array(Buffer.from("%PDF-1.7 fake"));
+      },
+    };
+    const mk = () =>
+      new ZohoCreatorReportsSource({
+        fetchReportDetail: async () => ({ code: 3000, result: { ...sampleResult, portalType: "ml" } }),
+        pdfGenerator: slowGenerator,
+      });
+    const [a, b] = await Promise.all([mk().openPdf("acc_ml", "A"), mk().openPdf("acc_ml", "B")]);
+    expect(peak).toBe(1);
+    expect((await drain(a.stream)).toString()).toContain("%PDF");
+    expect((await drain(b.stream)).toString()).toContain("%PDF");
+  });
+});
