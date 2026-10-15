@@ -8,6 +8,8 @@
  */
 import type { InformeReport, InformeRevision, ListInformesQuery, Page } from "@cardoc/domain";
 import { availableParallelism } from "node:os";
+import { setFlagsFromString } from "node:v8";
+import { runInNewContext } from "node:vm";
 import { Readable } from "node:stream";
 import { NotImplementedError, ReportNotFoundError, UpstreamError } from "./errors";
 import { limitConcurrency, type ImageOptimizer } from "./image-optimizer";
@@ -23,6 +25,22 @@ import { PORTAL_TYPE, shouldRejectDetailByPortalType } from "./portal-type";
  * el 13/10 ML pedía 2 PDFs con 1 s de diferencia). Las demás esperan su turno (~10 s c/u).
  */
 const pdfGenerationSlot = limitConcurrency(1);
+
+/**
+ * `gc()` FORZADO (el "unset" de PHP): Node libera memoria recién cuando pasa su recolector, y entre dos
+ * generaciones seguidas eso no alcanzaba a ocurrir — la 2da arrancaba con la basura de la 1ra (doc de
+ * pdf-lib + fotos, ~150-200 MB) y el proceso moría (dev 2026-10-15: 2120015 OK, 2117957 vacío a los 14 s).
+ * Se habilita en caliente (sin flags al arrancar Node, que Catalyst no permite). Si no se puede, no-op.
+ */
+const forceGc: () => void = (() => {
+  try {
+    setFlagsFromString("--expose-gc");
+    const gc: unknown = runInNewContext("gc");
+    return typeof gc === "function" ? (gc as () => void) : () => undefined;
+  } catch {
+    return () => undefined;
+  }
+})();
 
 /** Resultado del stream del PDF: el `Readable` se pipea directo al `res` de Express. */
 export interface ReportPdf {
@@ -299,15 +317,21 @@ export class ZohoCreatorReportsSource implements ReportsSource {
     const informe = transformReportData(result);
     const tQueue0 = Date.now();
     let tGen0 = tQueue0;
-    const bytes = await pdfGenerationSlot(() => {
+    let gcMs = 0;
+    const bytes = await pdfGenerationSlot(async () => {
+      const tGc = Date.now();
+      forceGc(); // libera lo que dejó la generación anterior ANTES de ocupar ~250 MB más
+      // Los buffers grandes se devuelven en segundo plano unos ms después del gc (medido: <50 ms).
+      await new Promise((r) => setTimeout(r, 25));
       tGen0 = Date.now();
+      gcMs = tGen0 - tGc;
       return this.gen.generate(informe);
     });
-    const colaMs = tGen0 - tQueue0;
+    const colaMs = tGen0 - tQueue0 - gcMs;
     // Telemetría de fases (logs de la función): permite diagnosticar dónde se va el tiempo EN EL
     // ENTORNO REAL (la ventana de Advanced I/O es 30s y el óptimo de concurrencia varía por entorno).
     console.log(
-      `[pdf] id=${id} detailMs=${tDetail} colaMs=${colaMs} genMs=${Date.now() - tGen0} pdfBytes=${bytes.length} componentes=${informe.detalles.length}`,
+      `[pdf] id=${id} detailMs=${tDetail} colaMs=${colaMs} gcMs=${gcMs} genMs=${Date.now() - tGen0} pdfBytes=${bytes.length} componentes=${informe.detalles.length}`,
     );
     return {
       stream: pdfStream(bytes),
