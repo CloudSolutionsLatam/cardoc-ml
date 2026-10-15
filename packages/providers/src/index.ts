@@ -13,4 +13,5 @@ export * from "./portal-type";
 export * from "./creator-client";
 export * from "./creator-token";
 export * from "./pdf-generator";
+export * from "./image-optimizer";
 export * from "./mlcenter-client";

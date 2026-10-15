@@ -105,7 +105,7 @@ latencia del upstream, que cardoc no controla.
 | Overhead propio (auth + scope + cap + validación) | p95 ≤ **200 ms** (excluye el round-trip a CRM/Creator/WorkDrive) | Métrica por request: `latency_ms` del `audit_log` menos el tiempo de upstream. Hoy el smoke e2e (16/16) corre contra path in-memory ⇒ mide solo overhead propio |
 | POST opportunity-contact end-to-end | p95 ≤ **3 s** (dominado por las 2-3 llamadas a Zoho CRM) | Métrica end-to-end con `correlationId`, medida contra Zoho CRM en E-02 |
 | Streaming del PDF | El PDF se **pipea** (`pdf.stream.pipe(res)`), no se buffea entero en memoria; headers antes del primer byte; `Cache-Control: no-store` | Inspección de `streamPdfHandler`. El **chunked/streaming real en Advanced I/O** y el **tope de payload** → validación de plataforma (§9, ítem 3) |
-| Tamaño del bundle de deploy | `index.js` ~1.3 MB (esbuild, cjs, target node24, external = `zcatalyst-sdk-node` (express inlineado)) — arranque liviano | Salida de `scripts/bundle-function.mjs` en CI |
+| Tamaño del bundle de deploy | `index.js` ~1.3 MB (esbuild, cjs, target node24, externals = `zcatalyst-sdk-node` + `sharp` (nativo, ADR-0016; express inlineado)) — arranque liviano | Salida de `scripts/bundle-function.mjs` en CI |
 | Capacidad baseline de diseño | Defaults de cap: **1.000/h, 10.000/día, 50.000/sem** por consumidor+endpoint (`CARDOC_CAP_DEFAULT_*`) — **placeholder** hasta cerrar volúmenes reales con el negocio | Recalibrar con datos reales de la(s) automotora(s) piloto |
 | Cold start de la function | Por medir | Validación de plataforma (§9, ítem 4) |
 

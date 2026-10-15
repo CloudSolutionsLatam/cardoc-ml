@@ -10,15 +10,17 @@
  * un cursor con paginación (`Layout`), wrapping de texto y tarjetas medidas. El CSS del portal
  * está a escala 794px = A4; acá los tamaños van directo en puntos (~px × 0.75).
  *
- * Las fotos son EVIDENCIA: se embeben en su calidad/resolución ORIGINAL (bytes sin recomprimir) y
- * se muestran a 2 POR FILA dentro de la tarjeta del componente, como el portal (§5.5). El tamaño
- * MOSTRADO es menor que el original, pero el PDF conserva el detalle (zoom). La salida sigue la
- * maqueta: título de sección con filete inferior, tarjeta redondeada con filete lateral de color
+ * Las fotos se muestran a 2 POR FILA dentro de la tarjeta del componente, como el portal (§5.5).
+ * Antes de embeberlas pasan por un `ImageOptimizer` opcional (ADR-0016): las de más de 1920 px se
+ * reducen y las que traen orientación EXIF se enderezan; el resto va con sus bytes originales. Las
+ * ORIGINALES quedan en WorkDrive como evidencia; el PDF lleva la versión de lectura. La salida sigue
+ * la maqueta: título de sección con filete inferior, tarjeta redondeada con filete lateral de color
  * por estado (border-left) y grilla de fotos 2/fila encerrada en la tarjeta.
  *
  * Las fotos se embeben vía un `ImageFetcher` inyectable (lo provee el adapter Creator con auth de
  * WorkDrive); sin fetcher se anota el conteo como nota (no hay red por defecto).
  */
+import { createHash } from "node:crypto";
 import type { EstadoComponente, InformeReport, ReportDetalle } from "@cardoc/domain";
 import {
   PDFDocument,
@@ -30,10 +32,48 @@ import {
   type PDFImage,
   type PDFPage,
 } from "pdf-lib";
+import type { ImageOptimizer } from "./image-optimizer";
 import { ML_LOGO_PNG_BASE64 } from "./ml-logo";
 
 /** Trae los bytes de una imagen (WorkDrive) o null si no se pudo. Lo inyecta el adapter Creator. */
 export type ImageFetcher = (url: string) => Promise<Uint8Array | null>;
+
+/** Telemetría de las fotos de UN PDF (la loguea el adapter: diagnostica peso, CPU y fotos perdidas). */
+export interface PhotoStats {
+  reportCode: string;
+  /** URLs distintas que entran al PDF (ya aplicado el tope de fotos por componente). */
+  urls: number;
+  /** Contenidos distintos embebidos (cada uno UNA vez, aunque lo referencien varias URLs). */
+  unicas: number;
+  /** URLs cuyo contenido es idéntico al de otra (reusan la misma imagen del PDF). */
+  duplicadas: number;
+  /** URLs que quedan SIN foto en el PDF (descarga o embed fallidos). */
+  fallidas: number;
+  reducidas: number;
+  enderezadas: number;
+  /** Bytes de las fotos únicas tal como llegaron vs. como quedaron embebidas. */
+  bytesOriginales: number;
+  bytesEmbebidos: number;
+  /** Suma de ms de optimización (las fotos se optimizan en paralelo: no es tiempo de reloj). */
+  optimizeMs: number;
+  /** Descargas simultáneas usadas (el efectivo: default o `CARDOC_PDF_IMAGE_CONCURRENCY`). */
+  descargasParalelas: number;
+  /** Reloj desde el inicio hasta la ÚLTIMA descarga, y hasta la última foto lista (red vs. CPU). */
+  descargaMs: number;
+  fotosMs: number;
+}
+
+/** Hito intermedio: todas las fotos bajadas. Se emite ANTES de terminar de reducirlas, así queda en
+ *  el log aunque la función corte por tiempo después (separa red de CPU en un 408). */
+export interface PhotoDownloadsDone {
+  reportCode: string;
+  urls: number;
+  descargasParalelas: number;
+  descargaMs: number;
+  bytesOriginales: number;
+  /** Fotos todavía esperando/reduciéndose en ese momento. */
+  pendientes: number;
+}
 
 export interface PdfGeneratorOptions {
   /** Fetcher de imágenes (WorkDrive). Sin él, las fotos se anotan como nota (conteo). */
@@ -42,6 +82,12 @@ export interface PdfGeneratorOptions {
   generatedAt?: string;
   /** Descargas de fotos en paralelo (default `IMAGE_CONCURRENCY`). Tunable por env vía container. */
   imageConcurrency?: number;
+  /** Reduce/endereza cada foto antes de embeberla (ADR-0016). Sin él, bytes originales. */
+  optimizeImage?: ImageOptimizer;
+  /** Recibe la telemetría de fotos de cada PDF generado. */
+  onPhotoStats?: (stats: PhotoStats) => void;
+  /** Hito: terminaron las descargas (puede haber fotos aún reduciéndose). */
+  onPhotoDownloadsDone?: (info: PhotoDownloadsDone) => void;
 }
 
 export interface PdfGenerator {
@@ -96,12 +142,21 @@ const MAX_PHOTOS = 6; // tope de fotos por componente (portal: .slice(0,6))
 // 2026-07-15, informe real 258 fotos/120 MB: descarga 17.0s de 17.4s totales; embed+save 0.4s).
 // ⚠️ El óptimo DEPENDE DEL ENTORNO: desde red local 8→17.0s · 16→9.3s · 32→5.4s, pero desde el
 // egress de Catalyst 32 REGRESIONÓ a 408 incluso tibio (throttling/conexiones colgadas hacia
-// WorkDrive), mientras 8 completaba en ~9-14s. Default conservador 8; tunear por entorno con
-// `CARDOC_PDF_IMAGE_CONCURRENCY` (env → container → opts), midiendo con los logs `[pdf]`.
+// WorkDrive), mientras 8 completaba en ~9-14s. 2026-10-15: con fotos de 12 MP (336 MB) la descarga
+// sola se llevaba ~25s a 8; con 16 la función moría por memoria (dev 2026-10-15) → se queda en 8 y las
+// fotos pesadas se piden como VISTA PREVIA de WorkDrive (~0.4 MB, ver createPublicImageFetcher), con la
+// descarga desacoplada de la reducción (`OPTIMIZE_BACKLOG`). Tunear por entorno con
+// `CARDOC_PDF_IMAGE_CONCURRENCY` (env → container → opts), midiendo con `[pdf-fotos]` (descargaMs/fotosMs).
 const IMAGE_CONCURRENCY = 8;
-// Las fotos son EVIDENCIA de inspección (motores, detalles finos): se embeben en su calidad/resolución
-// ORIGINAL, sin recomprimir (bajar calidad arruinaría el detalle; las fuentes ya son ~1080px). El peso
-// del PDF (302 fotos → ~126 MB) es inherente; la usabilidad se resuelve con caché/portal, no degradando.
+// Fotos bajadas que pueden esperar/estar en reducción a la vez. Las descargas NO esperan a sharp
+// (corren en paralelo con la CPU), pero si sharp se atrasa, un trabajador frena antes de bajar otra
+// foto: acota la memoria a ~4 originales (12 MP ≈ 3-5 MB c/u). Medido en 2117957 (local): 8 → pico
+// 382 MB, 4 → ~350 MB, mismo tiempo (Catalyst corta a 512 MB y en Linux libvips consume más que local).
+const OPTIMIZE_BACKLOG = 4;
+// Peso: el PDF es ~100% fotos. Con fotos de cámara nativa (12 MP, ~2.8 MB c/u) un informe llega a
+// 336 MB y Catalyst no lo entrega → `optimizeImage` las reduce a 1920 px (ADR-0016, revisa la decisión
+// 2026-07-02 de embeber originales, tomada cuando las fuentes eran ~1080 px). Las originales siguen
+// en WorkDrive como evidencia.
 
 // ── Paleta de marca Portal ML (hex verbatim del CSS de §5.5) ────────────────────
 const INK = rgb(0.173, 0.173, 0.173); // #2c2c2c — texto base / valores
@@ -349,7 +404,7 @@ export class PdfLibReportGenerator implements PdfGenerator {
     if (informe.score != null) this.score(L, informe.score, informe.score_comentario);
 
     // Pre-descarga TODAS las fotos en PARALELO antes de renderizar (evita el fetch secuencial de a una).
-    const images = await this.prefetchImages(doc, informe.detalles);
+    const images = await this.prefetchImages(doc, informe.detalles, informe.reportCode);
     for (const seccion of informe.secciones) {
       const detalles = informe.detalles.filter((d) => d.seccionId === seccion.id);
       if (!detalles.length) continue;
@@ -794,40 +849,107 @@ export class PdfLibReportGenerator implements PdfGenerator {
    * devolviendo un mapa `url → PDFImage`. La red es el cuello de botella: bajarlas concurrentemente
    * (en vez de una por una) recorta la latencia de ~suma a ~suma/concurrencia. Nunca rompe: una
    * foto que falla se omite (el informe se genera igual). Sin `fetchImage` → vacío.
+   *
+   * Cada foto se deduplica por CONTENIDO (la misma foto subida con otra URL se embebe una sola vez)
+   * y se optimiza apenas se baja, SIN frenar las descargas: red y CPU corren a la vez. La cola de
+   * fotos pendientes de reducir está acotada (`OPTIMIZE_BACKLOG`) y cada original se libera al
+   * reducirse, así el pico de memoria no acumula todas las originales (tope de Catalyst: 512 MB).
    */
-  private async prefetchImages(doc: PDFDocument, detalles: ReportDetalle[]): Promise<Map<string, PDFImage>> {
+  private async prefetchImages(doc: PDFDocument, detalles: ReportDetalle[], reportCode: string): Promise<Map<string, PDFImage>> {
     const map = new Map<string, PDFImage>();
     const fetchImage = this.opts.fetchImage;
     if (!fetchImage) return map;
     const urls = [...new Set(detalles.flatMap((d) => d.imagenes.slice(0, MAX_PHOTOS)))];
     if (!urls.length) return map;
+    const optimizer = this.opts.optimizeImage;
+    const stats: PhotoStats = {
+      reportCode,
+      urls: urls.length,
+      unicas: 0,
+      duplicadas: 0,
+      fallidas: 0,
+      reducidas: 0,
+      enderezadas: 0,
+      bytesOriginales: 0,
+      bytesEmbebidos: 0,
+      optimizeMs: 0,
+      descargasParalelas: 0,
+      descargaMs: 0,
+      fotosMs: 0,
+    };
+    const t0 = Date.now();
 
-    // 1) Descarga concurrente con tope: workers que consumen la lista de URLs (bytes ORIGINALES).
-    const bytesByUrl = new Map<string, Uint8Array>();
+    // 1) Descarga concurrente con tope + dedupe por contenido. La optimización corre APARTE (no frena
+    //    al worker), con contrapresión: si hay OPTIMIZE_BACKLOG fotos pendientes, el worker espera.
+    const keyByUrl = new Map<string, string>();
+    const bytesByKey = new Map<string, Uint8Array>();
+    const pending = new Set<Promise<void>>();
+    const optimizeOne = async (key: string, bytes: Uint8Array): Promise<void> => {
+      const t = Date.now();
+      const r = await optimizer!.optimize(bytes); // nunca lanza: ante falla devuelve el original
+      stats.optimizeMs += Date.now() - t;
+      if (r.reduced) stats.reducidas++;
+      if (r.oriented) stats.enderezadas++;
+      bytesByKey.set(key, r.bytes); // reemplaza al original → queda libre para el GC
+    };
     let next = 0;
     const worker = async (): Promise<void> => {
       while (next < urls.length) {
         const url = urls[next++] as string;
+        let bytes: Uint8Array | null = null;
         try {
-          const bytes = await fetchImage(url);
-          if (bytes && bytes.length >= 4) bytesByUrl.set(url, bytes);
+          bytes = await fetchImage(url);
         } catch {
           // WorkDrive caído / imagen ilegible → se omite
+        }
+        if (!bytes || bytes.length < 4) continue;
+        const key = createHash("sha1").update(bytes).digest("hex");
+        keyByUrl.set(url, key);
+        if (bytesByKey.has(key)) continue; // duplicada: ya la tomó otro worker (se marca ANTES del await)
+        bytesByKey.set(key, bytes);
+        stats.bytesOriginales += bytes.length;
+        if (optimizer) {
+          while (pending.size >= OPTIMIZE_BACKLOG) await Promise.race(pending);
+          const job: Promise<void> = optimizeOne(key, bytes).finally(() => pending.delete(job));
+          pending.add(job);
         }
       }
     };
     const concurrency = this.opts.imageConcurrency && this.opts.imageConcurrency > 0 ? this.opts.imageConcurrency : IMAGE_CONCURRENCY;
-    await Promise.all(Array.from({ length: Math.min(concurrency, urls.length) }, worker));
+    stats.descargasParalelas = Math.min(concurrency, urls.length);
+    await Promise.all(Array.from({ length: stats.descargasParalelas }, worker));
+    stats.descargaMs = Date.now() - t0;
+    this.opts.onPhotoDownloadsDone?.({
+      reportCode,
+      urls: urls.length,
+      descargasParalelas: stats.descargasParalelas,
+      descargaMs: stats.descargaMs,
+      bytesOriginales: stats.bytesOriginales,
+      pendientes: pending.size,
+    });
+    await Promise.all(pending);
+    stats.fotosMs = Date.now() - t0;
 
-    // 2) Embed secuencial (CPU rápido; no muta el doc de pdf-lib en paralelo).
-    for (const [url, bytes] of bytesByUrl) {
+    // 2) Embed secuencial (CPU rápido; no muta el doc de pdf-lib en paralelo), una vez por contenido.
+    const imageByKey = new Map<string, PDFImage>();
+    for (const [key, bytes] of bytesByKey) {
       try {
         const isPng = bytes[0] === 0x89 && bytes[1] === 0x50;
-        map.set(url, isPng ? await doc.embedPng(bytes) : await doc.embedJpg(bytes));
+        imageByKey.set(key, isPng ? await doc.embedPng(bytes) : await doc.embedJpg(bytes));
+        stats.bytesEmbebidos += bytes.length;
       } catch {
         // imagen corrupta → se omite
       }
     }
+    for (const [url, key] of keyByUrl) {
+      const img = imageByKey.get(key);
+      if (img) map.set(url, img);
+    }
+
+    stats.unicas = bytesByKey.size;
+    stats.duplicadas = keyByUrl.size - bytesByKey.size;
+    stats.fallidas = urls.length - map.size;
+    this.opts.onPhotoStats?.(stats);
     return map;
   }
 

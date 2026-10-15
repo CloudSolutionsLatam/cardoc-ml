@@ -12,7 +12,8 @@
   },
   "dependencies": {
     "@cardoc/domain": "workspace:*",
-    "pdf-lib": "^1.17.1"
+    "pdf-lib": "^1.17.1",
+    "sharp": "0.35.5"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",

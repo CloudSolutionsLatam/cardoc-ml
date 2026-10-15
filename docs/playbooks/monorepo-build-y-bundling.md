@@ -228,12 +228,12 @@ await build({
   sourcemap: true,
   // Catalyst NO instala las deps del package.json: express, zod y los @cardoc/* se inlinan.
   // El SDK es la EXCEPCIÓN: no se puede inlinar (require dinámicos) → externalizado + shippeado.
-  external: EXTERNALS, // ["zcatalyst-sdk-node"] — ver scripts/function-externals.mjs
+  external: EXTERNALS, // ["zcatalyst-sdk-node", "sharp"] — ver scripts/function-externals.mjs
   logLevel: "info",
 });
 ```
 
-La lista de externals **no** se escribe a mano en este script: vive en `scripts/function-externals.mjs`, que es la **fuente única** (la consumen tanto `bundle-function.mjs` como `deploy-prep-sdk.mjs`, ver §4.4). Hoy contiene un solo paquete: `zcatalyst-sdk-node`.
+La lista de externals **no** se escribe a mano en este script: vive en `scripts/function-externals.mjs`, que es la **fuente única** (la consumen tanto `bundle-function.mjs` como `deploy-prep-sdk.mjs`, ver §4.4). Hoy contiene dos: `zcatalyst-sdk-node` y `sharp` (nativo, ADR-0016).
 
 Decisiones, una por una:
 
@@ -243,14 +243,15 @@ Decisiones, una por una:
 | `format` | `cjs` | La función expone `export = app` (CommonJS); Catalyst Advanced I/O carga el módulo como CJS. |
 | `target` | `node24` | El runtime del stack es node24 (ver `catalyst-config.json`). No transpilar de más. |
 | `platform` | `node` | Resolución y builtins de Node, no de browser. |
-| `external` | `EXTERNALS` (`["zcatalyst-sdk-node"]`) | **No se inlinea** porque el SDK hace `require()` dinámicos de sus submódulos (p.ej. `./zcql/zcql`) que esbuild no puede resolver estáticamente. El runtime de Catalyst **tampoco lo provee**: se shippea como `node_modules` real vía `deploy-prep-sdk.mjs` (§4.4). Todo lo demás (`express`, `zod`, `@cardoc/*`) SÍ se inlinea, porque Catalyst **no** instala las deps del `package.json`. |
+| `external` | `EXTERNALS` (`["zcatalyst-sdk-node", "sharp"]`) | **No se inlinea** porque el SDK hace `require()` dinámicos de sus submódulos (p.ej. `./zcql/zcql`) que esbuild no puede resolver estáticamente. El runtime de Catalyst **tampoco lo provee**: se shippea como `node_modules` real vía `deploy-prep-sdk.mjs` (§4.4). Todo lo demás (`express`, `zod`, `@cardoc/*`) SÍ se inlinea, porque Catalyst **no** instala las deps del `package.json`. |
 | `sourcemap` | `true` | Genera `index.js.map` para que los stack traces de runtime mapeen al TS. |
 
 ### 4.3 La frontera externals vs. inlineados
 
 Es la línea que hay que entender:
 
-- **External (solo `zcatalyst-sdk-node`)** → queda como `require("zcatalyst-sdk-node")` en el bundle. No se inlina porque el SDK hace `require()` dinámicos de sus submódulos (p.ej. `./zcql/zcql`) que esbuild no resuelve estáticamente: inlinarlo revienta en runtime con `Cannot find module './zcql/zcql'`. Y el runtime de Catalyst **no lo provee**: si se externaliza pero no se shippea, revienta con `Cannot find module 'zcatalyst-sdk-node'`. La salida es shipearlo como `node_modules` real (§4.4).
+- **External `sharp`** (ADR-0016) → trae binarios nativos (libvips, paquetes `@img/*` por plataforma): no se puede inlinar en JS. `deploy-prep-sdk.mjs` lo instala para **Linux x64 glibc** (`--os/--cpu/--libc`) aunque el deploy se arme en Windows. Se carga perezoso: si no carga, la función arranca igual y el PDF sale sin reducir.
+- **External `zcatalyst-sdk-node`** → queda como `require("zcatalyst-sdk-node")` en el bundle. No se inlina porque el SDK hace `require()` dinámicos de sus submódulos (p.ej. `./zcql/zcql`) que esbuild no resuelve estáticamente: inlinarlo revienta en runtime con `Cannot find module './zcql/zcql'`. Y el runtime de Catalyst **no lo provee**: si se externaliza pero no se shippea, revienta con `Cannot find module 'zcatalyst-sdk-node'`. La salida es shipearlo como `node_modules` real (§4.4).
 - **Inlineado (todo el resto)** → `express`, y `@cardoc/*` con sus dependencias transitivas que vienen del registry (p.ej. `zod`, que usa `@cardoc/domain`), se copian dentro de `index.js`. Catalyst **no** instala las deps del `package.json`, así que si algo no está inlineado y no se shippea, no existe en runtime.
 
 Resultado: un `index.js` autocontenido que en runtime solo hace `require("zcatalyst-sdk-node")` — resuelto contra el `node_modules` real que materializa `deploy-prep-sdk.mjs`. Cero `workspace:*`, cero dependencia del registry que Catalyst tenga que instalar.
@@ -278,7 +279,7 @@ El bundle por sí solo no se despliega: Catalyst necesita su metadata, y el SDK 
 | Archivo | Rol |
 |---------|-----|
 | `index.js` (generado) | El bundle CJS que ejecuta el runtime. `catalyst-config.json` lo apunta con `execution.main`. |
-| `node_modules/` (generado) | El SDK real (`zcatalyst-sdk-node` + transitivas) que materializa `deploy-prep-sdk.mjs` (§4.4). Es lo que resuelve el `require("zcatalyst-sdk-node")` externalizado; viaja dentro del zip. |
+| `node_modules/` (generado) | El SDK real (`zcatalyst-sdk-node` + transitivas) y `sharp` con sus binarios de Linux (`@img/sharp-linux-x64` + libvips, ~19.5 MB) que materializa `deploy-prep-sdk.mjs` (§4.4). Es lo que resuelve los `require()` externalizados; viaja dentro del zip. |
 | `package.json` | Declara `main: index.js`. Catalyst **no** instala estas deps en deploy: el bundle es autocontenido salvo `zcatalyst-sdk-node`, que se shippea como `node_modules` real (no lo provee el runtime). |
 | `catalyst-config.json` | `{ deployment: { name: "api", stack: "node24", type: "advancedio" }, execution: { main: "index.js" } }` |
 

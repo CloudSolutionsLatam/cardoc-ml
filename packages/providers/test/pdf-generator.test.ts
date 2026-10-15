@@ -4,9 +4,10 @@
  * saltos de línea), score=0 válido, e informe vacío. No asserta bytes exactos.
  */
 import { describe, expect, it } from "vitest";
-import { PDFDocument, StandardFonts, PDFArray, PDFRawStream, PDFRef, decodePDFRawStream } from "pdf-lib";
+import { PDFDocument, PDFName, StandardFonts, PDFArray, PDFRawStream, PDFRef, decodePDFRawStream } from "pdf-lib";
+import sharp from "sharp";
 import type { InformeReport, ReportDetalle } from "@cardoc/domain";
-import { capLines, hardBreak, PdfLibReportGenerator, wrapText } from "../src/pdf-generator";
+import { capLines, hardBreak, PdfLibReportGenerator, wrapText, type PhotoStats } from "../src/pdf-generator";
 
 /** PNG 8x8 rojo válido (fixture para probar el embed de fotos, sin depender de una lib de imágenes). */
 const TINY_PNG = Buffer.from(
@@ -285,5 +286,83 @@ describe("helpers de layout (wrap / hard-break / cap)", () => {
     const capped = capLines(["a", "b", "c", "d"], 2);
     expect(capped).toHaveLength(2);
     expect(capped[1].endsWith("...")).toBe(true);
+  });
+});
+
+describe("PdfLibReportGenerator — optimización y dedupe de fotos (ADR-0016)", () => {
+  const RED = new Uint8Array(TINY_PNG);
+
+  /** Cuenta los XObject de imagen del PDF (cada contenido embebido = 1 objeto, se dibuje cuantas veces se dibuje). */
+  function imageObjects(doc: PDFDocument): number {
+    return doc.context.enumerateIndirectObjects().filter(([, o]) => o instanceof PDFRawStream && String(o.dict.get(PDFName.of("Subtype"))) === "/Image").length;
+  }
+
+  it("misma foto bajo 2 URLs → se optimiza y embebe UNA vez; telemetría cuenta duplicadas y fallidas", async () => {
+    const byUrl: Record<string, Uint8Array | null> = { a: RED, b: RED, c: null };
+    let optimizeCalls = 0;
+    const stats: PhotoStats[] = [];
+    const g = new PdfLibReportGenerator({
+      generatedAt: "t",
+      fetchImage: async (u) => byUrl[u] ?? null,
+      optimizeImage: {
+        optimize: async (bytes) => {
+          optimizeCalls++;
+          return { bytes, reduced: true, oriented: false };
+        },
+      },
+      onPhotoStats: (s) => stats.push(s),
+    });
+    const doc = await PDFDocument.load(await g.generate(report({ detalles: [detalle({ imagenes: ["a", "b", "c"] })] })));
+    expect(optimizeCalls).toBe(1);
+    expect(stats).toEqual([
+      expect.objectContaining({ reportCode: "#R-12345", urls: 3, unicas: 1, duplicadas: 1, fallidas: 1, reducidas: 1 }),
+    ]);
+    expect(imagePlacements(doc).filter((im) => im.page > 0)).toHaveLength(2); // a y b se dibujan; c no existe
+    const sinFotos = await PDFDocument.load(await gen.generate(report()));
+    expect(imageObjects(doc) - imageObjects(sinFotos)).toBe(1); // a y b comparten el MISMO objeto
+  });
+
+  it("las descargas NO esperan a la reducción (red y CPU en paralelo) y el hito de descargas sale antes del final", async () => {
+    let fetched = 0;
+    let releaseGate!: () => void;
+    const gate = new Promise<void>((r) => (releaseGate = r));
+    const events: string[] = [];
+    const g = new PdfLibReportGenerator({
+      generatedAt: "t",
+      fetchImage: async (u) => {
+        fetched++;
+        return new Uint8Array([...TINY_PNG, u.charCodeAt(0)]); // contenido distinto por URL
+      },
+      optimizeImage: {
+        optimize: async () => {
+          await gate; // sharp "ocupado" hasta que el test lo libere
+          return { bytes: RED, reduced: true, oriented: false };
+        },
+      },
+      onPhotoDownloadsDone: (d) => {
+        events.push(`descargas:${d.urls}:pendientes=${d.pendientes}`);
+        expect(fetched).toBe(4); // TODAS bajadas con la reducción todavía trabada (4 = OPTIMIZE_BACKLOG)
+        releaseGate();
+      },
+      onPhotoStats: (s) => events.push(`fin:reducidas=${s.reducidas}`),
+    });
+    await g.generate(report({ detalles: [detalle({ imagenes: ["a", "b", "c", "d"] })] }));
+    expect(events).toEqual(["descargas:4:pendientes=4", "fin:reducidas=4"]);
+  });
+
+  it("embebe lo que devuelve el optimizador (no el original)", async () => {
+    const reducida = new Uint8Array(await sharp({ create: { width: 16, height: 12, channels: 3, background: "#123456" } }).jpeg().toBuffer());
+    const g = new PdfLibReportGenerator({
+      generatedAt: "t",
+      fetchImage: async () => RED,
+      optimizeImage: { optimize: async () => ({ bytes: reducida, reduced: true, oriented: false }) },
+    });
+    const doc = await PDFDocument.load(await g.generate(report({ detalles: [detalle({ imagenes: ["a"] })] })));
+    const jpegs = doc.context
+      .enumerateIndirectObjects()
+      .map(([, o]) => o)
+      .filter((o): o is PDFRawStream => o instanceof PDFRawStream && String(o.dict.get(PDFName.of("Filter"))) === "/DCTDecode");
+    expect(jpegs).toHaveLength(1); // el PNG original NO quedó: solo el JPEG reducido (bytes tal cual)
+    expect(Buffer.from(jpegs[0].contents).equals(Buffer.from(reducida))).toBe(true);
   });
 });

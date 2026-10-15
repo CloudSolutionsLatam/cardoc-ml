@@ -44,7 +44,10 @@ const baseOpts = process.env.NODE_OPTIONS ?? "";
 const nodeOptions = baseOpts.includes("--use-system-ca") ? baseOpts : `${baseOpts} --use-system-ca`.trim();
 
 console.log(`→ instalando externals reales: ${Object.entries(wanted).map(([n, v]) => `${n}@${v}`).join(", ")}`);
-execSync("npm install --no-audit --no-fund --omit=dev", {
+// --os/--cpu/--libc: el deploy se arma en Windows pero el runtime de Catalyst es Linux x64 → los
+// paquetes nativos por plataforma (sharp → `@img/sharp-linux-x64` + libvips) se bajan para LINUX,
+// no para la máquina que despliega. No afecta a los paquetes JS puros (SDK). ADR-0016.
+execSync("npm install --no-audit --no-fund --omit=dev --os=linux --cpu=x64 --libc=glibc", {
   cwd: stage,
   stdio: "inherit",
   env: { ...process.env, NODE_OPTIONS: nodeOptions },

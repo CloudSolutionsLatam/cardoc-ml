@@ -157,7 +157,7 @@ Parámetros del bundle (en [`scripts/bundle-function.mjs`](../../scripts/bundle-
 | `entryPoints` | `src/index.ts` | `src/index.ts` hace `export = app` (CommonJS) |
 | `format` | `cjs` | Catalyst Advanced I/O carga CommonJS |
 | `platform` / `target` | `node` / `node24` | stack de la función |
-| `external` | `EXTERNALS` (= `['zcatalyst-sdk-node']`, en `scripts/function-externals.mjs`) | el SDK no se puede inlinar (require dinámicos) ni lo provee el runtime → se shippea como `node_modules` real; express y el resto se inlinean |
+| `external` | `EXTERNALS` (= `['zcatalyst-sdk-node', 'sharp']`, en `scripts/function-externals.mjs`) | el SDK no se puede inlinar (require dinámicos) ni lo provee el runtime; `sharp` trae binarios nativos → ambos se shippean como `node_modules` real (sharp con binarios de **Linux**, ADR-0016); express y el resto se inlinean |
 | `sourcemap` | `true` | genera `index.js.map` |
 
 Salida: `apps/catalyst/functions/api/index.js` (~1.3 MB) **+** `apps/catalyst/functions/api/node_modules/zcatalyst-sdk-node` (+ transitivas, materializadas por `deploy:prep`). **`index.js`, `index.js.map` y `node_modules` están gitignored.** Son artefacto de build, no se versionan — se regeneran en cada `predeploy`.
@@ -400,6 +400,7 @@ Errores reales que aparecieron en los deploys y su diagnóstico verificado. **An
 |---|---|---|
 | `500 INTERNAL_ERROR` — `Cannot find module 'zcatalyst-sdk-node'` | El SDK se externalizó pero no se shippeó (o un `pnpm install` restauró el symlink de pnpm, que se rompe al zipear). | Correr `pnpm --filter @cardoc/fn-api predeploy` (materializa el SDK real) y re-deployar. |
 | `500 INTERNAL_ERROR` — `Cannot find module './zcql/zcql'` | Se intentó **inlinar** el SDK (`external: []`); esbuild no resuelve sus `require()` dinámicos. | Mantener el SDK en `EXTERNALS` (`scripts/function-externals.mjs`) + shippearlo real. Nunca inlinarlo. |
+| Log `[pdf] sharp no disponible (...)` + `[pdf-fotos] optimizador=off` | sharp no cargó: el zip no trae `@img/sharp-linux-x64` (se deployó sin `predeploy`, o un `pnpm install` restauró el symlink de Windows), o el runtime es musl y no glibc. El PDF sale igual, **sin reducir** (ADR-0016). | `pnpm --filter @cardoc/fn-api predeploy` y re-deployar. Si el runtime fuera musl: `--libc=musl` en `deploy-prep-sdk.mjs`. |
 | `500 INTERNAL_ERROR` — `Cannot find module 'express'` | Se externalizó `express` asumiendo que el runtime lo trae. Catalyst NO instala las deps del `package.json`. | `express` (y `zod`, `@cardoc/*`) van **inlinados** en el bundle. Solo el SDK es external. |
 | `401 UNAUTHENTICATED` "token inválido" en TODO (con token correcto) | La tabla `api_tokens` está vacía (las tablas se crean sin filas) o el `token_hash` no matchea. | Sembrar `api_tokens` por "Add Row" con `token_hash` = sha256 del token (§6). |
 | `500 INTERNAL_ERROR` genérico ("error interno") sin más detalle | Throw no controlado; `errorMiddleware` no expone el detalle en la respuesta (por diseño, no filtra interno/PII). | Revisar logs de Catalyst; o, en dev, surfacear temporalmente `err.message` en `middleware/errors.ts` para diagnosticar y **revertir**. |

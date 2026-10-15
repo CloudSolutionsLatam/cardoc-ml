@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 import { PDFDocument } from "pdf-lib";
 import {
   createReportDetailFetcher,
+  describePhotoStats,
   NotImplementedError,
   ReportNotFoundError,
   UpstreamError,
@@ -49,6 +50,8 @@ describe("ZohoCreatorReportsSource.openPdf", () => {
     const body = await drain(pdf.stream);
     expect(body.toString("utf8").slice(0, 5)).toBe("%PDF-");
     await expect(PDFDocument.load(body)).resolves.toBeDefined();
+    // Content-Length exacto: sin él la respuesta sale chunked y el gateway de Catalyst la vacía.
+    expect(pdf.contentLength).toBe(body.length);
   });
 
   it("nombre del PDF: sin inspector.fecha usa la fecha de generación como fallback", async () => {
@@ -211,5 +214,16 @@ describe("shouldRejectDetailByPortalType (§5.3)", () => {
   it("null/undefined → permite", () => {
     expect(shouldRejectDetailByPortalType(null, "ml")).toBe(false);
     expect(shouldRejectDetailByPortalType(undefined, "ml")).toBe(false);
+  });
+});
+
+describe("describePhotoStats — línea [pdf-fotos] (ADR-0016)", () => {
+  it("resume peso antes/después y conteos, sin URLs ni datos del informe", () => {
+    const line = describePhotoStats(
+      { reportCode: "INFREV-5475", urls: 122, unicas: 112, duplicadas: 10, fallidas: 0, reducidas: 112, enderezadas: 80, bytesOriginales: 306_100_000, bytesEmbebidos: 51_240_000, optimizeMs: 20_000, descargasParalelas: 16, descargaMs: 13_000, fotosMs: 22_000 },
+      true,
+    );
+    expect(line).toMatch(/^\[pdf-fotos\] informe=INFREV-5475 urls=122 unicas=112 duplicadas=10 fallidas=0 optimizador=sharp reducidas=112 enderezadas=80 MB=306\.1->51\.2 optimizeMs=20000 descargas=16 descargaMs=13000 fotosMs=22000 cpus=\d+$/);
+    expect(line).not.toMatch(/https?:/);
   });
 });

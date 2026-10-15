@@ -4,4 +4,6 @@
 //
 // `zcatalyst-sdk-node` hace `require` dinámicos de sus submódulos (p.ej. `./zcql/zcql`) que
 // esbuild no puede resolver estáticamente → no se puede inlinar. Va externalizado + shippeado.
-export const EXTERNALS = ["zcatalyst-sdk-node"];
+// `sharp` trae binarios NATIVOS (libvips, paquetes `@img/*` por plataforma) que no se inlinan en JS
+// → externalizado + shippeado con los binarios de LINUX (deploy-prep-sdk.mjs). ADR-0016.
+export const EXTERNALS = ["zcatalyst-sdk-node", "sharp"];

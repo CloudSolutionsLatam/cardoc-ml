@@ -197,9 +197,10 @@ Secretos se cargan en la consola, nunca en el repo.
 
 [`playbooks/monorepo-build-y-bundling.md`](playbooks/monorepo-build-y-bundling.md):
 pnpm workspaces, `tsc -b` (project references), esbuild bundle a un único `index.js`
-CommonJS. `express`, `zod` y los `@cardoc/*` se **inlinan**; el **único external** es
+CommonJS. `express`, `zod` y los `@cardoc/*` se **inlinan**; los **externals** son
 `zcatalyst-sdk-node` (hace `require()` dinámicos que esbuild no resuelve, y el runtime de
-Catalyst no lo provee), que se **shippea** como `node_modules` real vía `deploy:prep`. La
+Catalyst no lo provee) y `sharp` (binarios nativos, ADR-0016), que se **shippean** como
+`node_modules` real vía `deploy:prep` (sharp con binarios de Linux). La
 lista de externals es única en `scripts/function-externals.mjs` (la consumen `bundle-function.mjs`
 y `deploy-prep-sdk.mjs`). Gotcha de install en red corporativa:
 `NODE_OPTIONS=--use-system-ca pnpm install`.
@@ -266,7 +267,7 @@ cardoc-ml/
 ├── apps/catalyst/
 │   ├── catalyst.json                      targets: ['api']
 │   └── functions/api/  @cardoc/fn-api      Advanced I/O: index.ts(export=app) · app.ts · container.ts · middleware/* · routes/*
-├── scripts/function-externals.mjs         fuente ÚNICA de externals (solo zcatalyst-sdk-node)
+├── scripts/function-externals.mjs         fuente ÚNICA de externals (zcatalyst-sdk-node + sharp)
 ├── scripts/bundle-function.mjs            esbuild → index.js CommonJS (express/zod/@cardoc/* inlineados; sdk external)
 ├── scripts/deploy-prep-sdk.mjs            materializa el external como node_modules real en el function dir
 ├── ARQUITECTURA.md · CONTRATOS.md · ATRIBUTOS-DE-CALIDAD.md · OPERACIONES.md · PLAN-DE-DESARROLLO.md

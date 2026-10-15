@@ -29,6 +29,10 @@ import {
   createCreatorTokenSigner,
   createPublicImageFetcher,
   createReportDetailFetcher,
+  createSharpImageOptimizer,
+  DEFAULT_WD_PREVIEW_ABOVE_BYTES,
+  DEFAULT_PHOTO_MAX_PX,
+  DEFAULT_PHOTO_QUALITY,
   MockCrmClient,
   MockMlCenterClient,
   MockReportsSource,
@@ -204,14 +208,30 @@ function buildCreatorReports(conn: CreatorConnection): ReportsSource {
     minute: "2-digit",
   });
   // Concurrencia de descarga de fotos: la descarga domina el tiempo de generación (perfil 2026-07-15).
-  // Default 32 (medido); tunable sin redeploy de código vía env.
+  // Default 8 (ver IMAGE_CONCURRENCY en pdf-generator.ts); tunable sin redeploy de código vía env.
   const imageConcurrency = Number(process.env["CARDOC_PDF_IMAGE_CONCURRENCY"]) || undefined;
   return new ZohoCreatorReportsSource({
     fetchReportDetail: createReportDetailFetcher(conn),
-    fetchImage: createPublicImageFetcher(),
+    // Fotos pesadas → vista previa de WorkDrive (ADR-0016). `CARDOC_PDF_WD_PREVIEW=0` la apaga sin redeploy.
+    fetchImage: createPublicImageFetcher(undefined, {
+      previewAboveBytes: process.env["CARDOC_PDF_WD_PREVIEW"] === "0" ? null : DEFAULT_WD_PREVIEW_ABOVE_BYTES,
+    }),
     generatedAt,
     imageConcurrency,
+    optimizeImage: resolvePhotoOptimizer() ?? undefined,
   });
+}
+
+/**
+ * Reducción de fotos del PDF (ADR-0016), tunable SIN redeploy por Env Vars:
+ * `CARDOC_PDF_PHOTO_MAX_PX` (default 1920; `0` la APAGA → fotos originales, como antes) y
+ * `CARDOC_PDF_PHOTO_QUALITY` (default 90). Si sharp no carga en la plataforma, también queda apagada.
+ */
+function resolvePhotoOptimizer(): ReturnType<typeof createSharpImageOptimizer> {
+  const rawMax = process.env["CARDOC_PDF_PHOTO_MAX_PX"];
+  const maxPx = rawMax === undefined || rawMax.trim() === "" ? DEFAULT_PHOTO_MAX_PX : Number(rawMax);
+  const quality = Number(process.env["CARDOC_PDF_PHOTO_QUALITY"]) || DEFAULT_PHOTO_QUALITY;
+  return createSharpImageOptimizer({ maxPx: Number.isFinite(maxPx) ? maxPx : DEFAULT_PHOTO_MAX_PX, quality });
 }
 
 /** Repos + adapters por request: DataStore (si el flag está) o in-memory sembrado. */

@@ -7,9 +7,11 @@
  * link en `Analisis.pdf_url` y luego stream. El consumidor NUNCA ve la URL/ubicación.
  */
 import type { InformeReport, InformeRevision, ListInformesQuery, Page } from "@cardoc/domain";
+import { availableParallelism } from "node:os";
 import { Readable } from "node:stream";
 import { NotImplementedError, ReportNotFoundError, UpstreamError } from "./errors";
-import { PdfLibReportGenerator, type ImageFetcher, type PdfGenerator } from "./pdf-generator";
+import type { ImageOptimizer } from "./image-optimizer";
+import { PdfLibReportGenerator, type ImageFetcher, type PdfGenerator, type PhotoStats } from "./pdf-generator";
 import { transformReportData } from "./report-transform";
 import type { ReportDetailFetcher } from "./creator-client";
 import { PORTAL_TYPE, shouldRejectDetailByPortalType } from "./portal-type";
@@ -19,6 +21,17 @@ export interface ReportPdf {
   stream: Readable;
   contentType: string;
   filename: string;
+  /**
+   * Bytes totales cuando se conocen (el PDF ya está completo en memoria). Se envía como
+   * `Content-Length`: sin él la respuesta sale `chunked` y el gateway de Catalyst devuelve
+   * `200` VACÍO para PDFs grandes (medido en dev 2026-10-15: 51 MB y 70 MB → 0 bytes).
+   */
+  contentLength?: number;
+}
+
+/** Envuelve los bytes del PDF SIN copiarlos (un PDF de 50 MB no se duplica en memoria; tope 512 MB). */
+function pdfStream(bytes: Uint8Array): Readable {
+  return Readable.from(Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength));
 }
 
 export interface ReportsSource {
@@ -105,8 +118,9 @@ export class MockReportsSource implements ReportsSource {
     const report = this.sampleReport(informe);
     const bytes = await this.pdfGenerator.generate(report);
     return {
-      stream: Readable.from(Buffer.from(bytes)),
+      stream: pdfStream(bytes),
       contentType: "application/pdf",
+      contentLength: bytes.byteLength,
       filename: buildReportFilename(report, id),
     };
   }
@@ -197,8 +211,26 @@ export interface ZohoCreatorReportsSourceDeps {
   generatedAt?: string;
   /** Descargas de fotos en paralelo (default del generador; tunable por env desde el container). */
   imageConcurrency?: number;
+  /** Reduce/endereza las fotos antes de embeberlas (ADR-0016). Sin él (o sin sharp), originales. */
+  optimizeImage?: ImageOptimizer;
   /** Inyectable para tests; por defecto pdf-lib con el `fetchImage`/`generatedAt` provistos. */
   pdfGenerator?: PdfGenerator;
+}
+
+/**
+ * Línea de log `[pdf-fotos]` (sin URLs ni PII): peso antes/después, fotos reducidas/enderezadas/
+ * duplicadas/perdidas y CPUs visibles — para dimensionar la reducción en el entorno REAL (la ventana
+ * de Advanced I/O es 30s y la CPU de Catalyst no se conoce de antemano). Exportado para test.
+ */
+export function describePhotoStats(s: PhotoStats, optimizer: boolean): string {
+  const mb = (n: number): string => (n / 1e6).toFixed(1);
+  return (
+    `[pdf-fotos] informe=${s.reportCode} urls=${s.urls} unicas=${s.unicas} duplicadas=${s.duplicadas} ` +
+    `fallidas=${s.fallidas} optimizador=${optimizer ? "sharp" : "off"} reducidas=${s.reducidas} ` +
+    `enderezadas=${s.enderezadas} MB=${mb(s.bytesOriginales)}->${mb(s.bytesEmbebidos)} ` +
+    `optimizeMs=${s.optimizeMs} descargas=${s.descargasParalelas} descargaMs=${s.descargaMs} fotosMs=${s.fotosMs} ` +
+    `cpus=${availableParallelism()}`
+  );
 }
 
 /**
@@ -219,6 +251,14 @@ export class ZohoCreatorReportsSource implements ReportsSource {
         fetchImage: deps.fetchImage,
         generatedAt: deps.generatedAt,
         imageConcurrency: deps.imageConcurrency,
+        optimizeImage: deps.optimizeImage,
+        onPhotoStats: (s) => console.log(describePhotoStats(s, deps.optimizeImage !== undefined)),
+        // Hito intermedio: queda en el log aunque después la función corte por tiempo (red vs. CPU).
+        onPhotoDownloadsDone: (d) =>
+          console.log(
+            `[pdf-fotos] informe=${d.reportCode} descargas completas: urls=${d.urls} descargas=${d.descargasParalelas} ` +
+              `MB=${(d.bytesOriginales / 1e6).toFixed(1)} descargaMs=${d.descargaMs} pendientes=${d.pendientes}`,
+          ),
       });
   }
 
@@ -257,8 +297,9 @@ export class ZohoCreatorReportsSource implements ReportsSource {
       `[pdf] id=${id} detailMs=${tDetail} genMs=${Date.now() - tGen0} pdfBytes=${bytes.length} componentes=${informe.detalles.length}`,
     );
     return {
-      stream: Readable.from(Buffer.from(bytes)),
+      stream: pdfStream(bytes),
       contentType: "application/pdf",
+      contentLength: bytes.byteLength,
       // Fallback de fecha del nombre: hoy la Custom API no devuelve `inspector.fecha` fiable
       // (pendiente en el Deluge, junto con motor/transmisión) → usamos la fecha de GENERACIÓN.
       filename: buildReportFilename(informe, id, toIsoDate(this.deps.generatedAt ?? "", "sin-fecha")),

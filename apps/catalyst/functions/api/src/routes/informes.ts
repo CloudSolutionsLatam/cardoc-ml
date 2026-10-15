@@ -16,6 +16,7 @@ function pipePdfResponse(res: Response, next: NextFunction, pdf: ReportPdf): voi
   res.setHeader("Content-Type", pdf.contentType);
   res.setHeader("Content-Disposition", `attachment; filename="${pdf.filename}"`);
   res.setHeader("Cache-Control", "no-store");
+  if (pdf.contentLength !== undefined) res.setHeader("Content-Length", String(pdf.contentLength));
   pdf.stream.on("error", (err: Error) => {
     // Si aún no se enviaron bytes, se traduce a 502; si ya empezó, se corta la conexión.
     if (!res.headersSent) {

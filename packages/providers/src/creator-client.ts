@@ -96,19 +96,83 @@ export function createReportDetailFetcher(conn: CreatorConnection, fetchFn: Fetc
 }
 
 /**
+ * Fotos más pesadas que esto se piden como VISTA PREVIA de WorkDrive en vez de bajar el original.
+ * Las originales de cámara (12 MP) pesan ~2.8 MB; las capturadas desde la app ~0.3-0.7 MB, que siguen
+ * bajando tal cual (sin achicarlas a 1536 px). ADR-0016.
+ */
+export const DEFAULT_WD_PREVIEW_ABOVE_BYTES = 1_500_000;
+/** Lado pedido a la vista previa. WorkDrive acota a ~2046×1536 (una vertical sale 1152×1536). */
+const WD_PREVIEW_PX = 1920;
+
+/**
+ * URL de la vista previa de WorkDrive para un link PÚBLICO de descarga
+ * (`files-accl.<dominio>/public/workdrive-external/download/<id>` →
+ * `previewengine-accl.<dominio>/image/WD/<id>?width=..&height=..`), o `null` si no es de WorkDrive.
+ * ⚠️ `previewengine` es el servicio que usa el visor web de WorkDrive: **no documentado**. Devuelve un
+ * JPEG reducido y YA ENDEREZADO (aplica la orientación EXIF) sin auth, igual que el link público.
+ * Medido en 2117957 (2026-10-15): 122 fotos 336 MB → 48.9 MB, 0 fallas.
+ */
+export function toWorkDrivePreviewUrl(url: string, px = WD_PREVIEW_PX): string | null {
+  let u: URL;
+  try {
+    u = new URL(url);
+  } catch {
+    return null;
+  }
+  const id = /^\/public\/workdrive-external\/download\/([A-Za-z0-9]+)$/.exec(u.pathname)?.[1];
+  if (!id || !u.hostname.startsWith("files-accl.")) return null;
+  return `${u.protocol}//${u.hostname.replace(/^files-accl\./, "previewengine-accl.")}/image/WD/${id}?width=${px}&height=${px}`;
+}
+
+export interface PublicImageFetcherOptions {
+  /** Timeout POR request (original o vista previa). */
+  timeoutMs?: number;
+  /** Desde qué tamaño (bytes) se usa la vista previa de WorkDrive. `null` = nunca (siempre originales). */
+  previewAboveBytes?: number | null;
+}
+
+const isImage = (b: Uint8Array): boolean =>
+  b.length > 3 && ((b[0] === 0xff && b[1] === 0xd8) || (b[0] === 0x89 && b[1] === 0x50));
+
+/**
  * Fetcher de imágenes para embeber fotos en el PDF. Las URLs de las fotos son **públicas** (Nestor
  * 2026-07-01) → GET sin auth. Degrada a `null` ante cualquier fallo (el informe se genera igual,
  * con placeholder). No necesita OAuth.
+ *
+ * Fotos pesadas (ADR-0016): apenas llegan los headers del original, si pesa más que
+ * `previewAboveBytes` se CANCELA su descarga y se pide la vista previa de WorkDrive (~0.4 MB, ya
+ * reducida y derecha) — no se bajan ni se decodifican los 12 MP. Si la vista previa falla, se vuelve
+ * al original (que el optimizador reduce con sharp, como antes).
  */
-export function createPublicImageFetcher(fetchFn: FetchFn = fetch, timeoutMs = 8_000): ImageFetcher {
+export function createPublicImageFetcher(fetchFn: FetchFn = fetch, opts: PublicImageFetcherOptions = {}): ImageFetcher {
+  const timeoutMs = opts.timeoutMs ?? 8_000;
+  const previewAbove = opts.previewAboveBytes === undefined ? DEFAULT_WD_PREVIEW_ABOVE_BYTES : opts.previewAboveBytes;
+  // Timeout POR FOTO: sin él, una conexión colgada bloquea a su worker hasta la guillotina de la
+  // plataforma (Advanced I/O corta TODO a los 30s) y un solo cuelgue mata la generación entera. Con
+  // timeout, la foto colgada se omite (misma degradación que una foto caída).
+  const get = (u: string) => fetchFn(u, { signal: AbortSignal.timeout(timeoutMs) });
+  const getBytes = async (u: string): Promise<Uint8Array | null> => {
+    const res = await get(u);
+    return res.ok ? new Uint8Array(await res.arrayBuffer()) : null;
+  };
+
   return async (url) => {
     try {
-      // Timeout POR FOTO: sin él, una conexión colgada bloquea a su worker hasta la guillotina de
-      // la plataforma (Advanced I/O corta TODO a los 30s) y un solo cuelgue mata la generación
-      // entera. Con timeout, la foto colgada se omite (misma degradación que una foto caída).
-      const res = await fetchFn(url, { signal: AbortSignal.timeout(timeoutMs) });
+      const res = await get(url);
       if (!res.ok) return null;
-      return new Uint8Array(await res.arrayBuffer());
+      const size = Number(res.headers.get("content-length"));
+      const previewUrl = previewAbove !== null && size > previewAbove ? toWorkDrivePreviewUrl(url) : null;
+      if (!previewUrl) return new Uint8Array(await res.arrayBuffer());
+
+      await res.body?.cancel().catch(() => undefined); // el original pesado NO se baja
+      try {
+        const preview = await getBytes(previewUrl);
+        if (preview && isImage(preview)) return preview;
+      } catch {
+        // timeout / red → cae al original
+      }
+      console.warn("[pdf] vista previa de WorkDrive no disponible → se baja el original");
+      return await getBytes(url);
     } catch {
       return null; // WorkDrive caído / timeout / archivo ilegible → sin foto, nunca rompe la generación
     }
