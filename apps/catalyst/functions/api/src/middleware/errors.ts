@@ -7,7 +7,7 @@
  * detalle interno, PII ni URLs/rutas/fileId del upstream.
  */
 import type { NextFunction, Request, RequestHandler, Response } from "express";
-import { PdfNotAvailableError, ReportNotFoundError, UpstreamError } from "@cardoc/providers";
+import { PdfNotAvailableError, ReportNotFoundError, ReportNotReadyError, UpstreamError, describeThrown } from "@cardoc/providers";
 import type { AuthedRequest } from "./auth";
 
 export type ErrorCode =
@@ -45,6 +45,22 @@ export function asyncHandler<Req extends Request = Request>(
   };
 }
 
+/** Mensaje al consumidor cuando Creator todavía no entrega el informe (pedido de Nestor 2026-10-20). */
+export const REPORT_NOT_READY_MESSAGE = "La solicitud no se encuentra en estado Completado; el PDF aún no está disponible";
+
+/**
+ * Causa puntual para el LOG (nunca para el consumidor): sistema + status + detalle del upstream, o el
+ * mensaje de un error no tipado. Sin URLs (podrían traer la publickey de Creator) y acotado.
+ */
+function describeCause(err: unknown): string {
+  if (err instanceof ApiError) return "";
+  const raw =
+    err instanceof UpstreamError
+      ? `upstream=${err.upstream} status=${err.httpStatus} detalle=${err.message}`
+      : `detalle=${describeThrown(err)}`;
+  return ` ${raw.replace(/https?:\/\/\S+/g, "<url>").slice(0, 400)}`;
+}
+
 /** Traduce errores conocidos de los puertos a un ApiError con código opaco. */
 function toApiError(err: unknown): ApiError {
   if (err instanceof ApiError) {
@@ -55,6 +71,10 @@ function toApiError(err: unknown): ApiError {
   }
   if (err instanceof PdfNotAvailableError) {
     return new ApiError(404, "PDF_NOT_AVAILABLE", "PDF no disponible", { informeId: err.id });
+  }
+  if (err instanceof ReportNotReadyError) {
+    // Creator respondió pero no entrega el informe: casi siempre todavía no está en estado final.
+    return new ApiError(502, "UPSTREAM_ERROR", REPORT_NOT_READY_MESSAGE, { upstream: err.upstream });
   }
   if (err instanceof UpstreamError) {
     // details.upstream = etiqueta OPACA ("crm"|"creator"|"workdrive"); nunca la URL interna.
@@ -73,8 +93,8 @@ export function errorMiddleware(err: unknown, req: Request, res: Response, next:
   const authed = req as AuthedRequest;
   const correlationId = authed.correlationId ?? null;
 
-  // Log operativo: solo IDs y código, nunca payload/PII ni URL interna.
-  console.error(`[error] correlationId=${correlationId ?? "-"} ${req.method} ${req.path} ${apiError.code}`);
+  // Log operativo: IDs, código y causa puntual del upstream; nunca payload/PII ni URL interna.
+  console.error(`[error] correlationId=${correlationId ?? "-"} ${req.method} ${req.path} ${apiError.code}${describeCause(err)}`);
 
   // Marca el código para que la auditoría on-finish lo registre.
   authed.errorCode = apiError.code;

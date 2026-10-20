@@ -11,11 +11,11 @@ import { availableParallelism } from "node:os";
 import { setFlagsFromString } from "node:v8";
 import { runInNewContext } from "node:vm";
 import { Readable } from "node:stream";
-import { NotImplementedError, ReportNotFoundError, UpstreamError } from "./errors";
+import { NotImplementedError, ReportNotFoundError, ReportNotReadyError, UpstreamError } from "./errors";
 import { limitConcurrency, type ImageOptimizer } from "./image-optimizer";
 import { PdfLibReportGenerator, type ImageFetcher, type PdfGenerator, type PhotoStats } from "./pdf-generator";
 import { transformReportData } from "./report-transform";
-import type { ReportDetailFetcher } from "./creator-client";
+import { describeCreatorMessage, type ReportDetailFetcher } from "./creator-client";
 import { PORTAL_TYPE, shouldRejectDetailByPortalType } from "./portal-type";
 
 /**
@@ -301,14 +301,18 @@ export class ZohoCreatorReportsSource implements ReportsSource {
     const env = await this.deps.fetchReportDetail(id, PORTAL_TYPE);
     const tDetail = Date.now() - t0;
     // Envelope: cualquier code != 3000 (o env/result ausente) es error del upstream (§4.1).
+    // Creator respondió pero sin el informe → "todavía no está listo" (ReportNotReadyError).
     if (!env || env.code !== 3000 || !env.result) {
-      throw new UpstreamError("creator", 502, `envelope inválido (code=${env?.code ?? "?"})`);
+      throw new ReportNotReadyError(502, `envelope inválido (code=${env?.code ?? "?"}${describeCreatorMessage(env)})`);
     }
     const result = env.result;
     // result de ERROR del upstream: `status` numérico >=400 (401 UNAUTHORIZED, 403, 500…). → 502,
     // NUNCA transformar (un result de error daría un PDF vacío con 200, enmascarando la falla).
+    // 401/403 = auth/token nuestro (UpstreamError genérico); el resto = informe no disponible aún.
     if (typeof result.status === "number" && result.status >= 400) {
-      throw new UpstreamError("creator", 502, `Creator error (status=${result.status}${result.error ? ` ${result.error}` : ""})`);
+      const detail = `Creator error (status=${result.status}${result.error ? ` ${result.error}` : ""}${describeCreatorMessage(result)})`;
+      if (result.status === 401 || result.status === 403) throw new UpstreamError("creator", 502, detail);
+      throw new ReportNotReadyError(502, detail);
     }
     // Defensa portalType (§5.3): recurso de otro portal → NOT_FOUND (no revelar existencia).
     if (shouldRejectDetailByPortalType(result, PORTAL_TYPE)) {

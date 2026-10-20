@@ -11,6 +11,7 @@ import {
   describePhotoStats,
   NotImplementedError,
   ReportNotFoundError,
+  ReportNotReadyError,
   UpstreamError,
   ZohoCreatorReportsSource,
   shouldRejectDetailByPortalType,
@@ -97,6 +98,23 @@ describe("ZohoCreatorReportsSource.openPdf", () => {
     ).rejects.toBeInstanceOf(UpstreamError);
   });
 
+  it("informe todavía no disponible (code != 3000 / result de error) → ReportNotReadyError con la causa", async () => {
+    const e1 = await source({ code: 3330, message: "Informe en estado Analizado" }).openPdf("acc_ml", "#R-1").catch((e) => e);
+    expect(e1).toBeInstanceOf(ReportNotReadyError);
+    expect(e1.message).toContain("code=3330");
+    expect(e1.message).toContain("Analizado");
+    const e2 = await source({ code: 3000, result: { status: 404, error: "NOT_FOUND" } }).openPdf("acc_ml", "#R-1").catch((e) => e);
+    expect(e2).toBeInstanceOf(ReportNotReadyError);
+  });
+
+  it("result 401/403 (auth/token nuestro) → UpstreamError genérico, NO 'no disponible'", async () => {
+    for (const status of [401, 403]) {
+      const err = await source({ code: 3000, result: { status } }).openPdf("acc_ml", "#R-1").catch((e) => e);
+      expect(err).toBeInstanceOf(UpstreamError);
+      expect(err).not.toBeInstanceOf(ReportNotReadyError);
+    }
+  });
+
   it("envelope null (fetcher devolvió null) → UpstreamError, no TypeError crudo", async () => {
     const src = new ZohoCreatorReportsSource({ fetchReportDetail: async () => null as unknown as CreatorEnvelope });
     await expect(src.openPdf("acc_ml", "#R-1")).rejects.toBeInstanceOf(UpstreamError);
@@ -125,6 +143,31 @@ describe("createReportDetailFetcher — manejo robusto del HTTP", () => {
   it("HTTP no-ok → UpstreamError con el status", async () => {
     const fetcher = createReportDetailFetcher(conn, async () => fakeRes({ ok: false, status: 503, json: async () => ({}) }));
     await expect(fetcher("#R-1", "ml")).rejects.toBeInstanceOf(UpstreamError);
+  });
+
+  it("HTTP 500 con body JSON de Creator → ReportNotReadyError con code y mensaje (sin URLs)", async () => {
+    const fetcher = createReportDetailFetcher(conn, async () =>
+      fakeRes({ ok: false, status: 500, json: async () => ({ code: 3100, message: "No data at https://creator.x/p?publickey=pk" }) }),
+    );
+    const err = await fetcher("#R-1", "ml").catch((e) => e);
+    expect(err).toBeInstanceOf(ReportNotReadyError);
+    expect(err.message).toContain("HTTP 500 code=3100");
+    expect(err.message).not.toContain("publickey");
+  });
+
+  it("HTTP no-ok de auth/token/caída (401, 9430, 503, sin JSON) → UpstreamError genérico", async () => {
+    const cases: Array<{ status: number; json: () => Promise<unknown> }> = [
+      { status: 401, json: async () => ({ code: 2945 }) },
+      { status: 500, json: async () => ({ code: 9430, message: "token" }) },
+      { status: 503, json: async () => ({ code: 1 }) },
+      { status: 500, json: async () => { throw new SyntaxError("html"); } },
+    ];
+    for (const c of cases) {
+      const fetcher = createReportDetailFetcher(conn, async () => fakeRes({ ok: false, ...c }));
+      const err = await fetcher("#R-1", "ml").catch((e) => e);
+      expect(err).toBeInstanceOf(UpstreamError);
+      expect(err).not.toBeInstanceOf(ReportNotReadyError);
+    }
   });
 
   it("body no-JSON (200 con HTML) → UpstreamError, no SyntaxError crudo", async () => {

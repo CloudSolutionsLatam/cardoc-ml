@@ -11,14 +11,14 @@
  * `tsc -b` de la función (include = `src/**`), y vitest no hace type-check.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { NotImplementedError, PdfNotAvailableError, ReportNotFoundError, UpstreamError } from "@cardoc/providers";
+import { NotImplementedError, PdfNotAvailableError, ReportNotFoundError, ReportNotReadyError, UpstreamError } from "@cardoc/providers";
 import type { Scope } from "@cardoc/domain";
 import {
   correlationMiddleware,
   requireInternalSecret,
   requireScope,
 } from "../src/middleware/auth";
-import { ApiError, errorMiddleware } from "../src/middleware/errors";
+import { ApiError, errorMiddleware, REPORT_NOT_READY_MESSAGE } from "../src/middleware/errors";
 import { listInformesHandler } from "../src/routes/informes";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -134,6 +134,28 @@ describe("errorMiddleware — mapeo a códigos estables sin fuga de internals", 
     // La URL/ruta interna del upstream NUNCA llega al consumidor.
     expect(JSON.stringify(c.body)).not.toContain("internal.workdrive");
     expect(JSON.stringify(c.body)).not.toContain("ruta/interna");
+  });
+
+  it("ReportNotReadyError → 502 UPSTREAM_ERROR con mensaje de estado; la causa va solo al log", () => {
+    const spy = vi.mocked(console.error);
+    spy.mockClear();
+    const c = run(new ReportNotReadyError(500, "GET_INSPECTION_REPORT_DETAIL HTTP 500 code=3100 \"x https://creator.x/p?publickey=pk\""));
+    expect(c.status).toBe(502);
+    expect(c.body.error.code).toBe("UPSTREAM_ERROR");
+    expect(c.body.error.message).toBe(REPORT_NOT_READY_MESSAGE);
+    expect(c.body.error.details.upstream).toBe("creator");
+    expect(JSON.stringify(c.body)).not.toContain("code=3100");
+    const line = String(spy.mock.calls[0]?.[0]);
+    expect(line).toContain("upstream=creator status=500 detalle=GET_INSPECTION_REPORT_DETAIL HTTP 500 code=3100");
+    expect(line).not.toContain("publickey");
+  });
+
+  it("UpstreamError genérico → mensaje genérico, causa puntual en el log", () => {
+    const spy = vi.mocked(console.error);
+    spy.mockClear();
+    const c = run(new UpstreamError("crm", 401, "Informes_Revision/search HTTP 401 INVALID_TOKEN"));
+    expect(c.body.error.message).toBe("error del sistema upstream");
+    expect(String(spy.mock.calls[0]?.[0])).toContain("upstream=crm status=401 detalle=Informes_Revision/search HTTP 401 INVALID_TOKEN");
   });
 
   it("Error desconocido → 500 INTERNAL_ERROR (mensaje genérico, sin detalle interno)", () => {

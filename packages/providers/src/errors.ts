@@ -17,6 +17,19 @@ export class UpstreamError extends Error {
 }
 
 /**
+ * Creator RESPONDIÓ por el informe pero no lo entregó — en la práctica, el informe todavía no está
+ * en estado final (ej. 2141293 en "Analizado", 2026-10-20). Sigue siendo un `UpstreamError("creator")`
+ * (mismo 502 UPSTREAM_ERROR), solo cambia el mensaje al consumidor. NO aplica a fallas de red, de
+ * auth/token ni a caídas de Creator: esas quedan como `UpstreamError` con el mensaje genérico.
+ */
+export class ReportNotReadyError extends UpstreamError {
+  constructor(httpStatus: number, message: string) {
+    super("creator", httpStatus, message);
+    this.name = "ReportNotReadyError";
+  }
+}
+
+/**
  * Mensaje legible de algo lanzado/rechazado, para logs. El SDK de Catalyst (`zcatalyst-sdk-node`)
  * rechaza sus llamadas HTTP no-2xx (refresh del token, Cache) con un OBJETO PLANO
  * `{statusCode, code, message}`, no un `Error` → `String(e)` daba "[object Object]".

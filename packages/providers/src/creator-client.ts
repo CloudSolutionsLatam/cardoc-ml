@@ -12,14 +12,27 @@
  */
 import type { RawInspectionReport } from "./report-transform";
 import type { ImageFetcher } from "./pdf-generator";
-import { UpstreamError, describeThrown } from "./errors";
+import { ReportNotReadyError, UpstreamError, describeThrown } from "./errors";
 
 type FetchFn = typeof fetch;
 
 /** Envelope de la Custom API: `{ code: 3000, result: {...} }` (planning.md §4.1). */
 export interface CreatorEnvelope {
   code?: number;
-  result?: (RawInspectionReport & { status?: number; error?: string }) | null;
+  /** Texto del error que devuelve Creator junto a un `code` != 3000 (cuando lo manda). */
+  message?: unknown;
+  result?: (RawInspectionReport & { status?: number; error?: string; message?: unknown }) | null;
+}
+
+/**
+ * ` "<mensaje>"` de un envelope/result de error de Creator, para el LOG (nunca para el consumidor):
+ * acotado a 200 chars y sin URLs (podrían traer la publickey). `""` si no hay mensaje.
+ */
+export function describeCreatorMessage(o: { message?: unknown } | null | undefined): string {
+  const raw = o?.message;
+  if (raw == null || raw === "") return "";
+  const text = (typeof raw === "string" ? raw : JSON.stringify(raw)).replace(/https?:\/\/\S+/g, "<url>");
+  return ` "${text.slice(0, 200)}"`;
 }
 
 /** Trae el envelope crudo del informe por id (+ portalType). Inyectable para tests. */
@@ -82,7 +95,18 @@ export function createReportDetailFetcher(conn: CreatorConnection, fetchFn: Fetc
       throw new UpstreamError("creator", 502, `GET_INSPECTION_REPORT_DETAIL red: ${(e as Error).message}`);
     }
     if (!res.ok) {
-      throw new UpstreamError("creator", res.status, `GET_INSPECTION_REPORT_DETAIL HTTP ${res.status}`);
+      // El body de error de Creator (`{code, message}`) va al log: sin él no se distingue la causa.
+      const body = (await res.json().catch(() => undefined)) as { code?: unknown; message?: unknown } | undefined;
+      const detail =
+        `GET_INSPECTION_REPORT_DETAIL HTTP ${res.status}` +
+        (body && typeof body === "object" ? ` code=${String(body.code ?? "?")}${describeCreatorMessage(body)}` : "");
+      // Creator procesó el pedido (respondió JSON) y rechazó ESTE informe → todavía no disponible.
+      // Fuera de eso: auth (401/403), token de sesión (9430), rate limit, caídas/gateway → genérico.
+      const functional =
+        body != null && typeof body === "object" && String(body.code) !== "9430" &&
+        ![401, 403, 429, 502, 503, 504].includes(res.status);
+      if (functional) throw new ReportNotReadyError(res.status, detail);
+      throw new UpstreamError("creator", res.status, detail);
     }
     // Body no-JSON / vacío / `null` (Zoho puede devolver una página de error con HTTP 200) → 502.
     try {
