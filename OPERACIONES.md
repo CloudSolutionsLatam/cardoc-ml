@@ -109,7 +109,7 @@ NODE_OPTIONS=--use-system-ca catalyst deploy --only functions:api --ignore-scrip
   `predeploy` (o `deploy:prep`) antes de deployar, o el runtime falla con `Cannot find module`.
 
 Configs versionadas: `apps/catalyst/catalyst.json` (`functions.source: 'functions'`,
-`targets: ['api']`) y `apps/catalyst/functions/api/catalyst-config.json`
+`targets: ['api', 'lab']`) y `apps/catalyst/functions/api/catalyst-config.json`
 (`deployment: { name:'api', stack:'node24', type:'advancedio' }`, `execution.main: 'index.js'`).
 Timezone del proyecto: `America/Montevideo`.
 
@@ -127,6 +127,32 @@ Timezone del proyecto: `America/Montevideo`.
   diagnostica desde la versión estable. `scripts/smoke-catalyst.mjs` acepta overrides para
   entornos con datastore/adapters reales: `BASE`, `SMOKE_TOKEN` (consumidor real), `SMOKE_NRO`
   (NroSolicitud único por corrida) y `SMOKE_INFORME_ID` (los defaults asumen dev memory+mock).
+
+### Función `lab` (pruebas de plataforma)
+
+Segunda función Advanced I/O (`apps/catalyst/functions/lab/`, JS plano, sin build) para medir la
+plataforma en el entorno real: hoy, subida de archivos pesados de Catalyst a WorkDrive (OQ-N8).
+Viaja en la promoción a Production junto con `api`, pero **está apagada por defecto**.
+
+- **Apagada salvo `LAB_ENABLED=1`**: sin esa env var responde `404` a todo. Prendida, exige el
+  header `x-lab-secret` == `LAB_SECRET` (secreto propio, **no** el `INTERNAL_WEBHOOK_SECRET`).
+  En Production prenderla solo mientras dure una prueba y volver a apagarla.
+- **Env vars por función** (Catalyst no las comparte entre funciones, y Production tiene las
+  suyas): `LAB_ENABLED`, `LAB_SECRET`, `ZOHO_CLIENT_ID`, `ZOHO_CLIENT_SECRET`, `ZOHO_REFRESH_TOKEN`.
+- **Memoria: 512 MB** (consola → Functions → lab). Con 256 MB muere desde 25 MB y el gateway
+  devuelve `200` con body vacío — el mismo síntoma que se confundió con un tope de tamaño.
+- **Deploy:** `cd apps/catalyst/functions/lab && npm run deploy:prep` (materializa el SDK; `lab`
+  está fuera del workspace de pnpm) → `cd apps/catalyst && catalyst deploy --only functions:lab
+  --ignore-scripts`.
+- **Token de Zoho:** por el conector del SDK (`zoho_crm_conn`, mismo Cache que `api`). Zoho
+  Accounts permite **10 pedidos de token cada 10 min por client**, compartidos con `api` de prod:
+  si el Cache falla, `lab` cae al refresh directo y se pausa 10 min ante el primer rechazo.
+- **Rutas:** `GET /env` (qué env vars ve, solo nombres) · `POST /upload?mb=N&mode=multipart`
+  (sube N MB a la carpeta WorkDrive `cardoc-ml-lab` y los manda a la papelera) ·
+  `POST /alloc?mb=N&copies=k` (solo memoria).
+- **Resultado 2026-10-21 (dev, 512 MB, subida en stream):** 50 MB en 3,3–5,0 s · 100 MB en
+  6,0–9,6 s · 200 MB en 12,0–19,7 s (8–17 MB/s), pico ~447 MB con 200 MB. La subida con
+  `FormData`/`Blob` copia el archivo y muere desde 75 MB: el write-back debe subir en stream.
 
 ## 3. Onboarding de una automotora nueva (checklist)
 

@@ -1,0 +1,13 @@
+{
+  "name": "lab",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Laboratorio de subida a WorkDrive (apagado por defecto: LAB_ENABLED=1)",
+  "main": "index.js",
+  "scripts": {
+    "deploy:prep": "npm install --omit=dev --no-package-lock --no-audit --no-fund"
+  },
+  "dependencies": {
+    "zcatalyst-sdk-node": "3.4.0"
+  }
+}

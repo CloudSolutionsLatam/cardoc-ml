@@ -5,3 +5,5 @@ packages:
   - "packages/*"
   # Catalyst Advanced I/O functions (cada una se despliega por separado).
   - "apps/catalyst/functions/*"
+  # `lab` es JS plano sin build: fuera del workspace para que pnpm no le ponga el SDK como symlink.
+  - "!apps/catalyst/functions/lab"

@@ -10,6 +10,10 @@ dist/
 # Bundles de las Catalyst functions (generados por esbuild en deploy — NO versionar)
 apps/catalyst/functions/*/index.js
 apps/catalyst/functions/*/index.js.map
+# `lab` no tiene bundle: su index.js ES el código fuente
+!apps/catalyst/functions/lab/index.js
+# el CLI de Catalyst genera un package-lock vacío en cada deploy
+apps/catalyst/functions/lab/package-lock.json
 
 # Salida del Catalyst CLI
 .output/
